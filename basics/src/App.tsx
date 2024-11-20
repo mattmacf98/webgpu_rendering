@@ -81,6 +81,8 @@ const App = () => {
     const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
     const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
     const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+    const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+    const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
 
     const primitiveState: GPUPrimitiveState = {
       topology: 'triangle-list' as GPUPrimitiveTopology,
@@ -92,7 +94,7 @@ const App = () => {
       depthCompare: 'less' as GPUCompareFunction,
       format: 'depth24plus-stencil8' as GPUTextureFormat,
     }
-    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), primitiveState, depthStencilState);
+    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection), primitiveState, depthStencilState);
   }
 
   useEffect(() => {
@@ -456,7 +458,8 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
-  public async render_obj_model(shaderCode: string, objFilePath: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array, normalMatrix: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
+  public async render_obj_model(shaderCode: string, objFilePath: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array, normalMatrix: Float32Array, 
+    lightDirection: Float32Array, viewDirection: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
     const objResponse = await fetch(objFilePath);
     const objBlob = await objResponse.blob();
     const objText = await objBlob.text();
@@ -467,6 +470,8 @@ class WebGPUContext {
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const normalMatrixBuffer = this._createGPUBuffer(normalMatrix, GPUBufferUsage.UNIFORM);
+    const lightDirectionBuffer = this._createGPUBuffer(lightDirection, GPUBufferUsage.UNIFORM);
+    const viewDirectionBuffer = this._createGPUBuffer(viewDirection, GPUBufferUsage.UNIFORM);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
@@ -480,8 +485,16 @@ class WebGPUContext {
       type: "buffer",
       buffer: normalMatrixBuffer,
     }
+    const lightDirectionBindGroupInput: IBindGroupInput = { 
+      type: "buffer",
+      buffer: lightDirectionBuffer,
+    }
+    const viewDirectionBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: viewDirectionBuffer,
+    }
   
-    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, normalMatrixBindGroupInput]);
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, normalMatrixBindGroupInput, lightDirectionBindGroupInput, viewDirectionBindGroupInput]);
 
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.vertexPositions, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: normalBuffer, layout: normalBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.normals, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
