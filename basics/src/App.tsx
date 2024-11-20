@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import triangleWgsl from "./shaders/triangle.wgsl?raw";
 import textureWgsl from "./shaders/textured_shape.wgsl?raw";
+import depthTestingWgsl from "./shaders/depth_testing.wgsl?raw";
 import * as glMatrix from "gl-matrix";
 
 const App = () => {
@@ -26,23 +27,47 @@ const App = () => {
     // webGpuContext.instance!.render_vertex_color_offset(triangleWgsl, 3, 1, positions, colors, offset);
 
     //TEXTURED SHAPE
-    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
-      glMatrix.vec3.fromValues(100, 100, 100), 
-      glMatrix.vec3.fromValues(0,0,0), 
-      glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+    //   glMatrix.vec3.fromValues(100, 100, 100), 
+    //   glMatrix.vec3.fromValues(0,0,0), 
+    //   glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
+    // const positions = new Float32Array([
+    //   100.0, -100.0, 0.0,
+    //   0.0, 100.0, 0.0,
+    //   -100.0, -100.0, 0.0
+    // ]);
+    // const texCoords = new Float32Array([
+    //   1.0, 0.0,
+    //   0.0, 0.0,
+    //   0.5, 1.0
+    // ]);
+    // webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "baboon.png");
+
+    //DEPTH TESTING
+    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(300, 300, 300), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
     const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
     const positions = new Float32Array([
-      100.0, -100.0, 0.0,
-      0.0, 100.0, 0.0,
-      -100.0, -100.0, 0.0
-    ]);
-    const texCoords = new Float32Array([
-      1.0, 0.0,
-      0.0, 0.0,
-      0.5, 1.0
-    ]);
-    webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "baboon.png");
+      -100.0, 100.0, 0.0,
+      -100.0, 100.0, 200.0,
+      100.0, 100.0, 0.0,
+      100.0, 100.0, 200.0,
 
+      100.0, -100.0, 0.0,
+      100.0, -100.0, 200.0,
+
+      -100.0, -100.0, 0.0,
+      -100.0, -100.0, 200.0,
+
+      -100.0, 100.0, 0.0,
+      -100.0, 100.0, 200.0
+    ]);
+    const primitiveState: GPUPrimitiveState = {
+      topology: 'triangle-strip' as GPUPrimitiveTopology,
+      frontFace: 'ccw' as GPUFrontFace,
+      cullMode: 'none' as GPUCullMode,
+    }
+    webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState);
   }
 
   useEffect(() => {
@@ -218,7 +243,7 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[]): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], primitiveState: GPUPrimitiveState): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
@@ -240,11 +265,7 @@ class WebGPUContext {
         entryPoint: WebGPUContext.FRAGMENT_ENTRY_POINT,
         targets: [colorState],
       },
-      primitive: {
-        topology: 'triangle-list' as GPUPrimitiveTopology,
-        frontFace: 'ccw' as GPUFrontFace,
-        cullMode: 'back' as GPUCullMode,
-      },
+      primitive: primitiveState
     }
 
     const pipeline = this._device.createRenderPipeline(pipelineDescriptor);
@@ -278,7 +299,7 @@ class WebGPUContext {
     return sampler;
   }
 
-  public render_vertex_color_offset(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array, offset: Float32Array) {
+  public render_vertex_color_offset(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array, offset: Float32Array, primitiveState: GPUPrimitiveState) {
 
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: colorBuffer, layout: colorBufferLayout } = this._createSingleAttributeVertexBuffer(colors, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
@@ -293,7 +314,7 @@ class WebGPUContext {
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout], primitiveState));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, colorBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
@@ -304,7 +325,7 @@ class WebGPUContext {
   }
 
   public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
-    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string) {
+    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string, primitiveState: GPUPrimitiveState) {
     const response = await fetch(imgUri);
     const blob = await response.blob();
     const imageBitmap = await createImageBitmap(blob);
@@ -342,9 +363,39 @@ class WebGPUContext {
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], primitiveState));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, texCoordBuffer);
+    passEncoder.setBindGroup(0, uniformBindGroup);
+    passEncoder.draw(vertexCount, instanceCount);
+    passEncoder.end();
+
+    this._device.queue.submit([commandEncoder.finish()]);
+  }
+
+  public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array, primitiveState: GPUPrimitiveState) {
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: projectionMatrixBuffer,
+    }
+  
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput]);
+
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+
+    const commandEncoder = this._device.createCommandEncoder();
+
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
+    passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], primitiveState));
+    passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
     passEncoder.draw(vertexCount, instanceCount);
     passEncoder.end();
