@@ -11,13 +11,16 @@ const App = () => {
       return;
     }
 
+    const offset = new Float32Array([
+      0.1, 0.1, 0.1
+    ]);
     const positions = new Float32Array([
       1.0, -1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0
     ]);
     const colors = new Float32Array([
       1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0
     ]);
-    webGpuContext.instance!.render(triangleWgsl, 3, 1, positions, colors);
+    webGpuContext.instance!.render(triangleWgsl, 3, 1, positions, colors, offset);
   }
 
   useEffect(() => {
@@ -44,6 +47,11 @@ interface WebGpuContextInitResult {
 interface IGPUVertexBuffer {
   buffer: GPUBuffer;
   layout: GPUVertexBufferLayout;
+}
+
+interface IUniformBindGroup {
+  bindGroupLayout: GPUBindGroupLayout;
+  bindGroup: GPUBindGroup;
 }
 
 class WebGPUContext {
@@ -113,25 +121,58 @@ class WebGPUContext {
     return renderPassDescriptor;
   }
 
-  private _createSingleAttributeVertexBuffer(vertices: Float32Array, attributeDesc: GPUVertexAttribute, arrayStride: number): IGPUVertexBuffer {
+  private _createGPUBuffer(data: Float32Array | Uint16Array, usage: GPUBufferUsageFlags): GPUBuffer {
+    const bufferDesc: GPUBufferDescriptor = {
+      size: data.byteLength,
+      usage: usage,
+      mappedAtCreation: true
+    }
+  
+    const buffer = this._device.createBuffer(bufferDesc);
+    if (data instanceof Float32Array) {
+      const writeArray = new Float32Array(buffer.getMappedRange());
+      writeArray.set(data);
+    } else if (data instanceof Uint16Array) {
+      const writeArray = new Uint16Array(buffer.getMappedRange());
+      writeArray.set(data);
+    }
+  
+    buffer.unmap();
+    return buffer;
+  }
+
+  private _createSingleAttributeVertexBuffer(vertexAttributeData: Float32Array, attributeDesc: GPUVertexAttribute, arrayStride: number): IGPUVertexBuffer {
     const layout: GPUVertexBufferLayout = {
       arrayStride,
       stepMode: "vertex",
       attributes: [attributeDesc],
     }
 
-    const bufferDesc: GPUBufferDescriptor = {
-      size: vertices.byteLength,
-      usage: GPUBufferUsage.VERTEX,
-      mappedAtCreation: true,
-    }
-
-    const buffer = this._device.createBuffer(bufferDesc);
-    const writeArray = new Float32Array(buffer.getMappedRange());
-    writeArray.set(vertices);
-    buffer.unmap();
+    const buffer = this._createGPUBuffer(vertexAttributeData, GPUBufferUsage.VERTEX);
 
     return { buffer, layout };
+  }
+
+  private _createUniformBindGroup(uniformData: Float32Array): IUniformBindGroup {
+    const uniformBindGroupLayout = this._device.createBindGroupLayout({
+      entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX,
+        buffer: {}
+      }]
+    });
+
+    const uniformBuffer = this._createGPUBuffer(uniformData, GPUBufferUsage.UNIFORM);
+
+    const uniformBindGroup = this._device.createBindGroup({
+      layout: uniformBindGroupLayout,
+      entries: [{
+        binding: 0,
+        resource: { buffer: uniformBuffer }
+      }]
+    });
+
+    return { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup };
   }
 
   private _createShaderModule(source: string) {
@@ -139,9 +180,9 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[]): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[]): GPURenderPipeline {
     // layour
-    const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: []};
+    const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
 
     //TODO: parametrize?
@@ -172,18 +213,21 @@ class WebGPUContext {
     return pipeline;
   }
 
-  public render(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array) {
+  public render(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array, offset: Float32Array) {
 
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: colorBuffer, layout: colorBufferLayout } = this._createSingleAttributeVertexBuffer(colors, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup(offset);
 
     const commandEncoder = this._device.createCommandEncoder();
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout]));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, colorBuffer);
+    passEncoder.setBindGroup(0, uniformBindGroup);
     passEncoder.draw(vertexCount, instanceCount);
     passEncoder.end();
 
