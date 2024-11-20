@@ -26,18 +26,22 @@ const App = () => {
     // webGpuContext.instance!.render_vertex_color_offset(triangleWgsl, 3, 1, positions, colors, offset);
 
     //TEXTURED SHAPE
-    const transformationMatrix = glMatrix.mat4.fromTranslation(glMatrix.mat4.create(), [-0.5, -0.5, 0.0]);
+    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+      glMatrix.vec3.fromValues(100, 100, 100), 
+      glMatrix.vec3.fromValues(0,0,0), 
+      glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
     const positions = new Float32Array([
-      1.0, -1.0, 0.0,
-      -1.0, -1.0, 0.0,
-      0.0, 1.0, 0.0
+      100.0, -100.0, 0.0,
+      0.0, 100.0, 0.0,
+      -100.0, -100.0, 0.0
     ]);
     const texCoords = new Float32Array([
-      1.0, 1.0,
-      0.0, 1.0,
-      0.5, 0.0
+      1.0, 0.0,
+      0.0, 0.0,
+      0.5, 1.0
     ]);
-    webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, transformationMatrix, "baboon.png");
+    webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "baboon.png");
 
   }
 
@@ -238,7 +242,7 @@ class WebGPUContext {
       },
       primitive: {
         topology: 'triangle-list' as GPUPrimitiveTopology,
-        frontFace: 'cw' as GPUFrontFace,
+        frontFace: 'ccw' as GPUFrontFace,
         cullMode: 'back' as GPUCullMode,
       },
     }
@@ -299,19 +303,25 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
-  public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array, transformationMatrix: Float32Array, imgUri: string) {
+  public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
+    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string) {
     const response = await fetch(imgUri);
     const blob = await response.blob();
     const imageBitmap = await createImageBitmap(blob);
 
     // CREATE UNIFORMS
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const texture = this._createTexture(imageBitmap);
     const sampler = this._createSampler();
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
       buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: projectionMatrixBuffer,
     }
     const textureBindGroupInput: IBindGroupInput = {
       type: "texture",
@@ -321,7 +331,7 @@ class WebGPUContext {
       type: "sampler",
       sampler: sampler,
     }
-    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
 
     // CREATE VERTEX BUFFERS
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
