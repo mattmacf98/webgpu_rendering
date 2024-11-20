@@ -67,7 +67,12 @@ const App = () => {
       frontFace: 'ccw' as GPUFrontFace,
       cullMode: 'none' as GPUCullMode,
     }
-    webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState);
+    const depthStencilState: GPUDepthStencilState = {
+      depthWriteEnabled: true,
+      depthCompare: 'less' as GPUCompareFunction,
+      format: 'depth24plus-stencil8' as GPUTextureFormat,
+    }
+    webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
   }
 
   useEffect(() => {
@@ -156,7 +161,7 @@ class WebGPUContext {
     return { instance: WebGPUContext._instance };
   }
 
-  private _createRenderTarget(): GPURenderPassDescriptor {
+  private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
     const colorTexture = this._context.getCurrentTexture();
     const colorTextureView = colorTexture.createView();
 
@@ -169,6 +174,18 @@ class WebGPUContext {
 
     const renderPassDescriptor: GPURenderPassDescriptor = {
       colorAttachments: [colorAttachment]
+    }
+
+    if (depthTexture) {
+      renderPassDescriptor.depthStencilAttachment = {
+        view: depthTexture.createView(),
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        stencilClearValue: 0,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'store'
+      }
     }
 
     return renderPassDescriptor;
@@ -243,7 +260,8 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], primitiveState: GPUPrimitiveState): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], 
+    primitiveState: GPUPrimitiveState, depthStencilState?: GPUDepthStencilState): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
@@ -265,7 +283,8 @@ class WebGPUContext {
         entryPoint: WebGPUContext.FRAGMENT_ENTRY_POINT,
         targets: [colorState],
       },
-      primitive: primitiveState
+      primitive: primitiveState,
+      depthStencil: depthStencilState,
     }
 
     const pipeline = this._device.createRenderPipeline(pipelineDescriptor);
@@ -284,6 +303,18 @@ class WebGPUContext {
     this._device.queue.copyExternalImageToTexture({ source: imageBitmap }, {texture}, textureDescriptor.size);
 
     return texture;
+  }
+
+  private _createDepthTexture(): GPUTexture {
+    const depthTextureDesc: GPUTextureDescriptor = {
+      size: { width: this._canvas.width, height: this._canvas.height },
+      dimension: '2d',
+      format: 'depth24plus-stencil8',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT 
+    };
+
+    const depthTexture = this._device.createTexture(depthTextureDesc);
+    return depthTexture;
   }
 
   private _createSampler(): GPUSampler {
@@ -373,7 +404,9 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
-  public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array, primitiveState: GPUPrimitiveState) {
+  public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
+    const depthTexture = this._createDepthTexture();
+
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
 
@@ -392,9 +425,9 @@ class WebGPUContext {
 
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], primitiveState));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
     passEncoder.draw(vertexCount, instanceCount);
