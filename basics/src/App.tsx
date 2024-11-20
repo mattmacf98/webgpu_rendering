@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import triangleWgsl from "./shaders/triangle.wgsl?raw";
 import textureWgsl from "./shaders/textured_shape.wgsl?raw";
+import * as glMatrix from "gl-matrix";
 
 const App = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -25,6 +26,7 @@ const App = () => {
     // webGpuContext.instance!.render_vertex_color_offset(triangleWgsl, 3, 1, positions, colors, offset);
 
     //TEXTURED SHAPE
+    const transformationMatrix = glMatrix.mat4.fromTranslation(glMatrix.mat4.create(), [-0.5, -0.5, 0.0]);
     const positions = new Float32Array([
       1.0, -1.0, 0.0,
       -1.0, -1.0, 0.0,
@@ -35,7 +37,7 @@ const App = () => {
       0.0, 1.0,
       0.5, 0.0
     ]);
-    webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, "baboon.png");
+    webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, transformationMatrix, "baboon.png");
 
   }
 
@@ -297,14 +299,20 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
-  public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array, imgUri: string) {
+  public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array, transformationMatrix: Float32Array, imgUri: string) {
     const response = await fetch(imgUri);
     const blob = await response.blob();
     const imageBitmap = await createImageBitmap(blob);
 
+    // CREATE UNIFORMS
     const texture = this._createTexture(imageBitmap);
     const sampler = this._createSampler();
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
 
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: transformationMatrixBuffer,
+    }
     const textureBindGroupInput: IBindGroupInput = {
       type: "texture",
       texture: texture,
@@ -313,11 +321,13 @@ class WebGPUContext {
       type: "sampler",
       sampler: sampler,
     }
-    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([textureBindGroupInput, samplerBindGroupInput]);
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
 
+    // CREATE VERTEX BUFFERS
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: texCoordBuffer, layout: texCoordBufferLayout } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 1 }, 2 * Float32Array.BYTES_PER_ELEMENT);
 
+    // CREATE COMMAND ENCODER
     const commandEncoder = this._device.createCommandEncoder();
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
