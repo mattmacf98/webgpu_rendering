@@ -94,7 +94,8 @@ const App = () => {
       depthCompare: 'less' as GPUCompareFunction,
       format: 'depth24plus-stencil8' as GPUTextureFormat,
     }
-    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection), primitiveState, depthStencilState);
+    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix),
+      Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection), primitiveState, depthStencilState, 4);
   }
 
   useEffect(() => {
@@ -183,15 +184,33 @@ class WebGPUContext {
     return { instance: WebGPUContext._instance };
   }
 
-  private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
+  private _createRenderTarget(depthTexture?: GPUTexture, msaa?: number): GPURenderPassDescriptor {
     const colorTexture = this._context.getCurrentTexture();
     const colorTextureView = colorTexture.createView();
 
-    const colorAttachment: GPURenderPassColorAttachment = {
-      view: colorTextureView,
-      clearValue: { r: 1, g: 0, b: 0, a: 1 },
-      loadOp: "clear",
-      storeOp: "store",
+    let colorAttachment: GPURenderPassColorAttachment;
+    if (msaa) {
+      const msaaTexture = this._device.createTexture({
+        size: { width: this._canvas.width, height: this._canvas.height },
+        sampleCount: msaa,
+        format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+
+      colorAttachment = {
+        view: msaaTexture.createView(),
+        resolveTarget: colorTextureView,
+        clearValue: { r: 1, g: 0, b: 0, a: 1 },
+        loadOp: "clear",
+        storeOp: "store",
+      }
+    } else {
+      colorAttachment = {
+        view: colorTextureView,
+        clearValue: { r: 1, g: 0, b: 0, a: 1 },
+        loadOp: "clear",
+        storeOp: "store",
+      }
     }
 
     const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -283,7 +302,7 @@ class WebGPUContext {
   }
 
   private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], 
-    primitiveState: GPUPrimitiveState, depthStencilState?: GPUDepthStencilState): GPURenderPipeline {
+    primitiveState: GPUPrimitiveState, depthStencilState?: GPUDepthStencilState, msaa?: number): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
@@ -307,6 +326,7 @@ class WebGPUContext {
       },
       primitive: primitiveState,
       depthStencil: depthStencilState,
+      multisample: msaa ? { count: msaa} : undefined
     }
 
     const pipeline = this._device.createRenderPipeline(pipelineDescriptor);
@@ -327,10 +347,11 @@ class WebGPUContext {
     return texture;
   }
 
-  private _createDepthTexture(): GPUTexture {
+  private _createDepthTexture(msaa?: number): GPUTexture {
     const depthTextureDesc: GPUTextureDescriptor = {
       size: { width: this._canvas.width, height: this._canvas.height },
       dimension: '2d',
+      sampleCount: msaa,
       format: 'depth24plus-stencil8',
       usage: GPUTextureUsage.RENDER_ATTACHMENT 
     };
@@ -459,13 +480,13 @@ class WebGPUContext {
   }
 
   public async render_obj_model(shaderCode: string, objFilePath: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array, normalMatrix: Float32Array, 
-    lightDirection: Float32Array, viewDirection: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
+    lightDirection: Float32Array, viewDirection: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState, msaa: number) {
     const objResponse = await fetch(objFilePath);
     const objBlob = await objResponse.blob();
     const objText = await objBlob.text();
     const objDataExtractor = new ObjDataExtractor(objText);
 
-    const depthTexture = this._createDepthTexture();
+    const depthTexture = this._createDepthTexture(msaa);
 
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
@@ -502,9 +523,9 @@ class WebGPUContext {
    
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture, msaa));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState, msaa));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, normalBuffer);
     passEncoder.setIndexBuffer(indexBuffer, "uint16");
