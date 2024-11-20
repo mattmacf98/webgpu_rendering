@@ -10,7 +10,22 @@ const App = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const render = async () => {
-    const webGpuContext = await WebGPUContext.create(canvasRef.current!);
+    const primitiveState: GPUPrimitiveState = {
+      topology: 'triangle-list' as GPUPrimitiveTopology,
+      frontFace: 'ccw' as GPUFrontFace,
+      cullMode: 'none' as GPUCullMode,
+    }
+    const depthStencilState: GPUDepthStencilState = {
+      depthWriteEnabled: true,
+      depthCompare: 'less' as GPUCompareFunction,
+      format: 'depth24plus-stencil8' as GPUTextureFormat,
+    }
+    const webGpuContext = await WebGPUContext.create({
+      canvas: canvasRef.current!,
+      primitiveState,
+      depthStencilState,
+      msaa: 4
+    });
     if (webGpuContext.error) {
       console.error(webGpuContext.error);
       return;
@@ -84,18 +99,8 @@ const App = () => {
     const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
     const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
 
-    const primitiveState: GPUPrimitiveState = {
-      topology: 'triangle-list' as GPUPrimitiveTopology,
-      frontFace: 'ccw' as GPUFrontFace,
-      cullMode: 'none' as GPUCullMode,
-    }
-    const depthStencilState: GPUDepthStencilState = {
-      depthWriteEnabled: true,
-      depthCompare: 'less' as GPUCompareFunction,
-      format: 'depth24plus-stencil8' as GPUTextureFormat,
-    }
-    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix),
-      Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection), primitiveState, depthStencilState, 4);
+  
+    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection));
   }
 
   useEffect(() => {
@@ -135,6 +140,12 @@ interface IUniformBindGroup {
   bindGroup: GPUBindGroup;
 }
 
+interface IWebGPUContextOptions {
+  canvas: HTMLCanvasElement;
+  primitiveState: GPUPrimitiveState;
+  depthStencilState?: GPUDepthStencilState;
+  msaa?: number;
+}
 class WebGPUContext {
   private static VERTEX_ENTRY_POINT = "vs_main";
   private static FRAGMENT_ENTRY_POINT = "fs_main";
@@ -142,8 +153,11 @@ class WebGPUContext {
   private _context: GPUCanvasContext;
   private _device: GPUDevice;
   private _canvas: HTMLCanvasElement;
+  private _primitiveState: GPUPrimitiveState;
+  private _depthStencilState?: GPUDepthStencilState;
+  private _msaa?: number;
 
-  public static async create(canvas: HTMLCanvasElement): Promise<WebGpuContextInitResult> {
+  public static async create(options: IWebGPUContextOptions): Promise<WebGpuContextInitResult> {
     if (WebGPUContext._instance) {
       return { instance: WebGPUContext._instance };
     }
@@ -166,7 +180,7 @@ class WebGPUContext {
     }
 
     //create the context
-    const context = canvas.getContext("webgpu");
+    const context = options.canvas.getContext("webgpu");
     if (!context) {
       return { error: "Failed to get WebGPU context" };
     }
@@ -180,19 +194,28 @@ class WebGPUContext {
 
     context.configure(canvasConfig);
 
-    WebGPUContext._instance = new WebGPUContext(context, device, canvas);
+    WebGPUContext._instance = new WebGPUContext(context, device, options.canvas, options.primitiveState, options.depthStencilState, options.msaa);
     return { instance: WebGPUContext._instance };
   }
 
-  private _createRenderTarget(depthTexture?: GPUTexture, msaa?: number): GPURenderPassDescriptor {
+  private constructor(context: GPUCanvasContext, device: GPUDevice, canvas: HTMLCanvasElement, primitiveState: GPUPrimitiveState, depthStencilState?: GPUDepthStencilState, msaa?: number) {
+    this._context = context;
+    this._device = device;
+    this._canvas = canvas;
+    this._primitiveState = primitiveState;
+    this._depthStencilState = depthStencilState;
+    this._msaa = msaa;
+  }
+
+  private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
     const colorTexture = this._context.getCurrentTexture();
     const colorTextureView = colorTexture.createView();
 
     let colorAttachment: GPURenderPassColorAttachment;
-    if (msaa) {
+    if (this._msaa) {
       const msaaTexture = this._device.createTexture({
         size: { width: this._canvas.width, height: this._canvas.height },
-        sampleCount: msaa,
+        sampleCount: this._msaa,
         format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
@@ -301,8 +324,7 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], 
-    primitiveState: GPUPrimitiveState, depthStencilState?: GPUDepthStencilState, msaa?: number): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[]): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
@@ -324,9 +346,9 @@ class WebGPUContext {
         entryPoint: WebGPUContext.FRAGMENT_ENTRY_POINT,
         targets: [colorState],
       },
-      primitive: primitiveState,
-      depthStencil: depthStencilState,
-      multisample: msaa ? { count: msaa} : undefined
+      primitive: this._primitiveState,
+      depthStencil: this._depthStencilState,
+      multisample: this._msaa ? { count: this._msaa} : undefined
     }
 
     const pipeline = this._device.createRenderPipeline(pipelineDescriptor);
@@ -347,11 +369,11 @@ class WebGPUContext {
     return texture;
   }
 
-  private _createDepthTexture(msaa?: number): GPUTexture {
+  private _createDepthTexture(): GPUTexture {
     const depthTextureDesc: GPUTextureDescriptor = {
       size: { width: this._canvas.width, height: this._canvas.height },
       dimension: '2d',
-      sampleCount: msaa,
+      sampleCount: this._msaa,
       format: 'depth24plus-stencil8',
       usage: GPUTextureUsage.RENDER_ATTACHMENT 
     };
@@ -373,7 +395,7 @@ class WebGPUContext {
     return sampler;
   }
 
-  public render_vertex_color_offset(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array, offset: Float32Array, primitiveState: GPUPrimitiveState) {
+  public render_vertex_color_offset(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, colors: Float32Array, offset: Float32Array) {
 
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: colorBuffer, layout: colorBufferLayout } = this._createSingleAttributeVertexBuffer(colors, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
@@ -388,7 +410,7 @@ class WebGPUContext {
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout], primitiveState));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout]));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, colorBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
@@ -399,7 +421,7 @@ class WebGPUContext {
   }
 
   public async render_textured_shape(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
-    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string, primitiveState: GPUPrimitiveState) {
+    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string) {
     const response = await fetch(imgUri);
     const blob = await response.blob();
     const imageBitmap = await createImageBitmap(blob);
@@ -437,7 +459,7 @@ class WebGPUContext {
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], primitiveState));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout]));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, texCoordBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
@@ -447,7 +469,7 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
-  public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
+  public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array) {
     const depthTexture = this._createDepthTexture();
 
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
@@ -470,7 +492,7 @@ class WebGPUContext {
 
     const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout]));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
     passEncoder.draw(vertexCount, instanceCount);
@@ -480,13 +502,13 @@ class WebGPUContext {
   }
 
   public async render_obj_model(shaderCode: string, objFilePath: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array, normalMatrix: Float32Array, 
-    lightDirection: Float32Array, viewDirection: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState, msaa: number) {
+    lightDirection: Float32Array, viewDirection: Float32Array) {
     const objResponse = await fetch(objFilePath);
     const objBlob = await objResponse.blob();
     const objText = await objBlob.text();
     const objDataExtractor = new ObjDataExtractor(objText);
 
-    const depthTexture = this._createDepthTexture(msaa);
+    const depthTexture = this._createDepthTexture();
 
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
@@ -523,9 +545,9 @@ class WebGPUContext {
    
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture, msaa));
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState, msaa));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout]));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, normalBuffer);
     passEncoder.setIndexBuffer(indexBuffer, "uint16");
@@ -534,12 +556,6 @@ class WebGPUContext {
     passEncoder.end();
 
     this._device.queue.submit([commandEncoder.finish()]);
-  }
-
-  private constructor(context: GPUCanvasContext, device: GPUDevice, canvas: HTMLCanvasElement) {
-    this._context = context;
-    this._device = device;
-    this._canvas = canvas;
   }
 }
 
