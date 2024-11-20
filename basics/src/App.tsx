@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 import triangleWgsl from "./shaders/triangle.wgsl?raw";
 import textureWgsl from "./shaders/textured_shape.wgsl?raw";
 import depthTestingWgsl from "./shaders/depth_testing.wgsl?raw";
+import objModelWgsl from "./shaders/obj_model.wgsl?raw";
 import * as glMatrix from "gl-matrix";
+import ObjFileParser from "obj-file-parser";
 
 const App = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -45,25 +47,40 @@ const App = () => {
     // webGpuContext.instance!.render_textured_shape(textureWgsl, 3, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "baboon.png");
 
     //DEPTH TESTING
-    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(300, 300, 300), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(300, 300, 300), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
+    // const positions = new Float32Array([
+    //   -100.0, 100.0, 0.0,
+    //   -100.0, 100.0, 200.0,
+    //   100.0, 100.0, 0.0,
+    //   100.0, 100.0, 200.0,
+
+    //   100.0, -100.0, 0.0,
+    //   100.0, -100.0, 200.0,
+
+    //   -100.0, -100.0, 0.0,
+    //   -100.0, -100.0, 200.0,
+
+    //   -100.0, 100.0, 0.0,
+    //   -100.0, 100.0, 200.0
+    // ]);
+    // const primitiveState: GPUPrimitiveState = {
+    //   topology: 'triangle-strip' as GPUPrimitiveTopology,
+    //   frontFace: 'ccw' as GPUFrontFace,
+    //   cullMode: 'none' as GPUCullMode,
+    // }
+    // const depthStencilState: GPUDepthStencilState = {
+    //   depthWriteEnabled: true,
+    //   depthCompare: 'less' as GPUCompareFunction,
+    //   format: 'depth24plus-stencil8' as GPUTextureFormat,
+    // }
+    // webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
+
+    //MODEL LOADING
+    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(3, 3, 3), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
     const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
-    const positions = new Float32Array([
-      -100.0, 100.0, 0.0,
-      -100.0, 100.0, 200.0,
-      100.0, 100.0, 0.0,
-      100.0, 100.0, 200.0,
-
-      100.0, -100.0, 0.0,
-      100.0, -100.0, 200.0,
-
-      -100.0, -100.0, 0.0,
-      -100.0, -100.0, 200.0,
-
-      -100.0, 100.0, 0.0,
-      -100.0, 100.0, 200.0
-    ]);
     const primitiveState: GPUPrimitiveState = {
-      topology: 'triangle-strip' as GPUPrimitiveTopology,
+      topology: 'triangle-list' as GPUPrimitiveTopology,
       frontFace: 'ccw' as GPUFrontFace,
       cullMode: 'none' as GPUCullMode,
     }
@@ -72,7 +89,7 @@ const App = () => {
       depthCompare: 'less' as GPUCompareFunction,
       format: 'depth24plus-stencil8' as GPUTextureFormat,
     }
-    webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
+    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
   }
 
   useEffect(() => {
@@ -436,9 +453,76 @@ class WebGPUContext {
     this._device.queue.submit([commandEncoder.finish()]);
   }
 
+  public async render_obj_model(shaderCode: string, objFilePath: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array, primitiveState: GPUPrimitiveState, depthStencilState: GPUDepthStencilState) {
+    const objResponse = await fetch(objFilePath);
+    const objBlob = await objResponse.blob();
+    const objText = await objBlob.text();
+    const objDataExtractor = new ObjDataExtractor(objText);
+
+    const depthTexture = this._createDepthTexture();
+
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      buffer: projectionMatrixBuffer,
+    }
+  
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput]);
+
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.vertexPositions, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+    const indexBuffer = this._createGPUBuffer(objDataExtractor.indices, GPUBufferUsage.INDEX);
+   
+    const commandEncoder = this._device.createCommandEncoder();
+
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
+    passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], primitiveState, depthStencilState));
+    passEncoder.setVertexBuffer(0, positionBuffer);
+    passEncoder.setIndexBuffer(indexBuffer, "uint16");
+    passEncoder.setBindGroup(0, uniformBindGroup);
+    passEncoder.drawIndexed(objDataExtractor.indices.length, 1, 0, 0, 0);
+    passEncoder.end();
+
+    this._device.queue.submit([commandEncoder.finish()]);
+  }
+
   private constructor(context: GPUCanvasContext, device: GPUDevice, canvas: HTMLCanvasElement) {
     this._context = context;
     this._device = device;
     this._canvas = canvas;
+  }
+}
+
+class ObjDataExtractor {
+  private _vertexPositions: Float32Array;
+  private _indices: Uint16Array;
+
+  constructor(objText: String) {
+    const objFileParser = new ObjFileParser(objText);
+    const objFile = objFileParser.parse();
+    this._vertexPositions = new Float32Array(objFile.models[0].vertices.flatMap(v => [v.x, v.y, v.z]));
+
+    const indices = [];
+    for (const face of objFile.models[0].faces) {
+      for (const v of face.vertices) {
+        indices.push(v.vertexIndex - 1);
+      }
+    }
+
+    this._indices = new Uint16Array(indices);
+  }
+
+  public get vertexPositions(): Float32Array {
+    return this._vertexPositions;
+  }
+
+  public get indices(): Uint16Array {
+    return this._indices;
   }
 }
