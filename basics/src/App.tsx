@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import triangleWgsl from "./shaders/triangle.wgsl?raw";
 
 const App = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -10,7 +11,7 @@ const App = () => {
       return;
     }
 
-    webGpuContext.instance!.render();
+    webGpuContext.instance!.render(triangleWgsl, "fs_main", "vs_main", 3, 1);
   }
 
   useEffect(() => {
@@ -98,11 +99,51 @@ class WebGPUContext {
     return renderPassDescriptor;
   }
 
-  public render() {
+  public createShaderModule(source: string) {
+    const shaderModule = this._device.createShaderModule({ code: source });
+    return shaderModule;
+  }
+
+  public createPipeline(shaderModule: GPUShaderModule, fragmentEntryPoint: string, vertexEntryPoint: string): GPURenderPipeline {
+    // layour
+    const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: []};
+    const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
+
+    //TODO: parametrize?
+    const colorState = {
+      format: 'bgra8unorm' as GPUTextureFormat,
+    }
+
+    const pipelineDescriptor: GPURenderPipelineDescriptor = {
+      layout: layout,
+      vertex: {
+        module: shaderModule,
+        entryPoint: vertexEntryPoint,
+        buffers: []
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: fragmentEntryPoint,
+        targets: [colorState],
+      },
+      primitive: {
+        topology: 'triangle-list' as GPUPrimitiveTopology,
+        frontFace: 'ccw' as GPUFrontFace,
+        cullMode: 'back' as GPUCullMode,
+      },
+    }
+
+    const pipeline = this._device.createRenderPipeline(pipelineDescriptor);
+    return pipeline;
+  }
+
+  public render(shaderCode: string, fragmentEntryPoint: string, vertexEntryPoint: string, vertexCount: number, instanceCount: number) {
     const commandEncoder = this._device.createCommandEncoder();
 
     const passEncoder = commandEncoder.beginRenderPass(this.createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+    passEncoder.setPipeline(this.createPipeline(this.createShaderModule(shaderCode), fragmentEntryPoint, vertexEntryPoint));
+    passEncoder.draw(vertexCount, instanceCount);
     passEncoder.end();
 
     this._device.queue.submit([commandEncoder.finish()]);
