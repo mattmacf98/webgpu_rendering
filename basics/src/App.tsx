@@ -11,7 +11,10 @@ const App = () => {
       return;
     }
 
-    webGpuContext.instance!.render(triangleWgsl, "fs_main", "vs_main", 3, 1);
+    const positions = new Float32Array([
+      1.0, -1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0
+    ]);
+    webGpuContext.instance!.render(triangleWgsl, 3, 1, positions);
   }
 
   useEffect(() => {
@@ -34,7 +37,15 @@ interface WebGpuContextInitResult {
   instance?: WebGPUContext;
   error?: string;
 }
+
+interface IGPUVertexBuffer {
+  buffer: GPUBuffer;
+  layout: GPUVertexBufferLayout;
+}
+
 class WebGPUContext {
+  private static VERTEX_ENTRY_POINT = "vs_main";
+  private static FRAGMENT_ENTRY_POINT = "fs_main";
   private static _instance: WebGPUContext;
   private _context: GPUCanvasContext;
   private _device: GPUDevice;
@@ -81,7 +92,7 @@ class WebGPUContext {
     return { instance: WebGPUContext._instance };
   }
 
-  public createRenderTarget(): GPURenderPassDescriptor {
+  private _createRenderTarget(): GPURenderPassDescriptor {
     const colorTexture = this._context.getCurrentTexture();
     const colorTextureView = colorTexture.createView();
 
@@ -99,12 +110,39 @@ class WebGPUContext {
     return renderPassDescriptor;
   }
 
-  public createShaderModule(source: string) {
+  private _createPositionBuffer(vertices: Float32Array): IGPUVertexBuffer {
+    const positionAttributeDesc: GPUVertexAttribute = {
+      format: "float32x3",
+      offset: 0,
+      shaderLocation: 0,
+    }
+
+    const layout: GPUVertexBufferLayout = {
+      arrayStride: 3 * Float32Array.BYTES_PER_ELEMENT,
+      stepMode: "vertex",
+      attributes: [positionAttributeDesc],
+    }
+
+    const positionBufferDesc: GPUBufferDescriptor = {
+      size: vertices.byteLength,
+      usage: GPUBufferUsage.VERTEX,
+      mappedAtCreation: true,
+    }
+
+    const buffer = this._device.createBuffer(positionBufferDesc);
+    const writeArray = new Float32Array(buffer.getMappedRange());
+    writeArray.set(vertices);
+    buffer.unmap();
+
+    return { buffer, layout };
+  }
+
+  private _createShaderModule(source: string) {
     const shaderModule = this._device.createShaderModule({ code: source });
     return shaderModule;
   }
 
-  public createPipeline(shaderModule: GPUShaderModule, fragmentEntryPoint: string, vertexEntryPoint: string): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[]): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: []};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
@@ -118,17 +156,17 @@ class WebGPUContext {
       layout: layout,
       vertex: {
         module: shaderModule,
-        entryPoint: vertexEntryPoint,
-        buffers: []
+        entryPoint: WebGPUContext.VERTEX_ENTRY_POINT,
+        buffers: vertexBuffers,
       },
       fragment: {
         module: shaderModule,
-        entryPoint: fragmentEntryPoint,
+        entryPoint: WebGPUContext.FRAGMENT_ENTRY_POINT,
         targets: [colorState],
       },
       primitive: {
         topology: 'triangle-list' as GPUPrimitiveTopology,
-        frontFace: 'ccw' as GPUFrontFace,
+        frontFace: 'cw' as GPUFrontFace,
         cullMode: 'back' as GPUCullMode,
       },
     }
@@ -137,12 +175,16 @@ class WebGPUContext {
     return pipeline;
   }
 
-  public render(shaderCode: string, fragmentEntryPoint: string, vertexEntryPoint: string, vertexCount: number, instanceCount: number) {
+  public render(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array) {
+
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createPositionBuffer(vertices);
+
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this.createRenderTarget());
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this.createPipeline(this.createShaderModule(shaderCode), fragmentEntryPoint, vertexEntryPoint));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout]));
+    passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.draw(vertexCount, instanceCount);
     passEncoder.end();
 
