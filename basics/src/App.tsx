@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import triangleWgsl from "./shaders/triangle.wgsl?raw";
 import textureWgsl from "./shaders/textured_shape.wgsl?raw";
+import vertGaussianBlurWgsl from "./shaders/vert_gaussian_blur.wgsl?raw";
+import horizGaussianBlurWgsl from "./shaders/horiz_gaussian_blur.wgsl?raw";
 import depthTestingWgsl from "./shaders/depth_testing.wgsl?raw";
 import objModelWgsl from "./shaders/obj_model.wgsl?raw";
 import * as glMatrix from "gl-matrix";
@@ -11,20 +13,13 @@ const App = () => {
 
   const render = async () => {
     const primitiveState: GPUPrimitiveState = {
-      topology: 'triangle-list' as GPUPrimitiveTopology,
+      topology: 'triangle-strip' as GPUPrimitiveTopology,
       frontFace: 'ccw' as GPUFrontFace,
       cullMode: 'none' as GPUCullMode,
     }
-    const depthStencilState: GPUDepthStencilState = {
-      depthWriteEnabled: true,
-      depthCompare: 'less' as GPUCompareFunction,
-      format: 'depth24plus-stencil8' as GPUTextureFormat,
-    }
     const webGpuContext = await WebGPUContext.create({
       canvas: canvasRef.current!,
-      primitiveState,
-      depthStencilState,
-      msaa: 4
+      primitiveState
     });
     if (webGpuContext.error) {
       console.error(webGpuContext.error);
@@ -92,15 +87,33 @@ const App = () => {
     // webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
 
     //MODEL LOADING
-    const modelViewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(3, 3, 3), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
-    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
-    const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
-    const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
-    const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
-    const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+    // const modelViewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(3, 3, 3), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
+    // const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
+    // const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+    // const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+    // const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
 
+    // GAUSSIAN BLUR
+    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+      glMatrix.vec3.fromValues(0, 0, 10), 
+      glMatrix.vec3.fromValues(0,0,0), 
+      glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
+    const orthProjMatrix = glMatrix.mat4.ortho(glMatrix.mat4.create(), -320.0, 320.0, 240.0, -240.0, -1000.0, 1000.0);
+    const positions = new Float32Array([
+      100.0, -100.0, 0.0,
+      100.0, 100.0, 0.0,
+      -100.0, -100.0, 0.0,
+      -100.0, 100.0, 0.0
+    ]);
+    const texCoords = new Float32Array([
+      1.0, 0.0,
+      1.0, 1.0,
+      0.0, 0.0,
+      0.0, 1.0
+    ]);
+    webGpuContext.instance!.render_gaussian_blur(vertGaussianBlurWgsl, horizGaussianBlurWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(orthProjMatrix), "baboon.png");
   
-    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection));
   }
 
   useEffect(() => {
@@ -126,6 +139,8 @@ interface WebGpuContextInitResult {
 
 interface IBindGroupInput {
   type: "buffer" | "texture" | "sampler";
+  visibility: number;
+  readonly?: boolean;
   buffer?: GPUBuffer;
   texture?: GPUTexture;
   sampler?: GPUSampler;
@@ -207,30 +222,76 @@ class WebGPUContext {
     this._msaa = msaa;
   }
 
-  private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
-    const colorTexture = this._context.getCurrentTexture();
-    const colorTextureView = colorTexture.createView();
+  // private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
+  //   const colorTexture = this._context.getCurrentTexture();
+  //   const colorTextureView = colorTexture.createView();
 
+  //   let colorAttachment: GPURenderPassColorAttachment;
+  //   if (this._msaa) {
+  //     const msaaTexture = this._device.createTexture({
+  //       size: { width: this._canvas.width, height: this._canvas.height },
+  //       sampleCount: this._msaa,
+  //       format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
+  //       usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  //     });
+
+  //     colorAttachment = {
+  //       view: msaaTexture.createView(),
+  //       resolveTarget: colorTextureView,
+  //       clearValue: { r: 1, g: 0, b: 0, a: 1 },
+  //       loadOp: "clear",
+  //       storeOp: "store",
+  //     }
+  //   } else {
+  //     colorAttachment = {
+  //       view: colorTextureView,
+  //       clearValue: { r: 1, g: 0, b: 0, a: 1 },
+  //       loadOp: "clear",
+  //       storeOp: "store",
+  //     }
+  //   }
+
+  //   const renderPassDescriptor: GPURenderPassDescriptor = {
+  //     colorAttachments: [colorAttachment]
+  //   }
+
+  //   if (depthTexture) {
+  //     renderPassDescriptor.depthStencilAttachment = {
+  //       view: depthTexture.createView(),
+  //       depthClearValue: 1,
+  //       depthLoadOp: 'clear',
+  //       depthStoreOp: 'store',
+  //       stencilClearValue: 0,
+  //       stencilLoadOp: 'clear',
+  //       stencilStoreOp: 'store'
+  //     }
+  //   }
+
+  //   return renderPassDescriptor;
+  // }
+
+  private _createRenderTarget(colorAttachmentTexture: GPUTexture, clearValue: {r: number, g: number, b: number, a: number}, msaa?: number, depthTexture?: GPUTexture): GPURenderPassDescriptor { 
+    const textureView = colorAttachmentTexture.createView();
     let colorAttachment: GPURenderPassColorAttachment;
-    if (this._msaa) {
+    if (msaa) {
       const msaaTexture = this._device.createTexture({
         size: { width: this._canvas.width, height: this._canvas.height },
-        sampleCount: this._msaa,
+        sampleCount: msaa,
         format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
         usage: GPUTextureUsage.RENDER_ATTACHMENT,
       });
 
       colorAttachment = {
         view: msaaTexture.createView(),
-        resolveTarget: colorTextureView,
-        clearValue: { r: 1, g: 0, b: 0, a: 1 },
+        resolveTarget: textureView,
+        clearValue: clearValue,
         loadOp: "clear",
         storeOp: "store",
       }
     } else {
       colorAttachment = {
-        view: colorTextureView,
-        clearValue: { r: 1, g: 0, b: 0, a: 1 },
+        view: textureView,
+        clearValue: clearValue,
         loadOp: "clear",
         storeOp: "store",
       }
@@ -294,15 +355,19 @@ class WebGPUContext {
       const input = bindGroupInputs[i];
       switch (input.type) {
         case "buffer":
-          layoutEntries.push({ binding: i, visibility: GPUShaderStage.VERTEX, buffer: {} });
+          const layoutEntry = { binding: i, visibility: input.visibility, buffer: {} }
+          if (input.readonly) {
+            layoutEntry.buffer = {type: "read-only-storage"};
+          }
+          layoutEntries.push(layoutEntry);
           bindGroupEntries.push({ binding: i, resource: { buffer: input.buffer! } });
           break;
         case "texture":
-          layoutEntries.push({ binding: i, visibility: GPUShaderStage.FRAGMENT, texture: {} });
+          layoutEntries.push({ binding: i, visibility: input.visibility, texture: {} });
           bindGroupEntries.push({ binding: i, resource: input.texture!.createView() });
           break;
         case "sampler":
-          layoutEntries.push({ binding: i, visibility: GPUShaderStage.FRAGMENT, sampler: {} });
+          layoutEntries.push({ binding: i, visibility: input.visibility, sampler: {} });
           bindGroupEntries.push({ binding: i, resource: input.sampler! });
           break;
       }
@@ -324,14 +389,14 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[]): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], colorFormat: GPUTextureFormat): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
 
     //TODO: parametrize?
     const colorState = {
-      format: 'bgra8unorm' as GPUTextureFormat,
+      format: colorFormat,
     }
 
     const pipelineDescriptor: GPURenderPipelineDescriptor = {
@@ -355,7 +420,7 @@ class WebGPUContext {
     return pipeline;
   }
 
-  private _createTexture(imageBitmap: ImageBitmap): GPUTexture {
+  private _createTextureFromImage(imageBitmap: ImageBitmap): GPUTexture {
     const textureDescriptor: GPUTextureDescriptor = {
       size: { width: imageBitmap.width, height: imageBitmap.height },
       format: "rgba8unorm",
@@ -382,6 +447,17 @@ class WebGPUContext {
     return depthTexture;
   }
 
+  private _createTexture(width: number, height: number): GPUTexture { 
+    const textureDescriptor: GPUTextureDescriptor = {
+      size: { width, height },
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    }
+
+    const texture = this._device.createTexture(textureDescriptor);
+    return texture;
+  }
+
   private _createSampler(): GPUSampler {
     const samplerDescriptor: GPUSamplerDescriptor = {
       addressModeU: "repeat",
@@ -402,15 +478,16 @@ class WebGPUContext {
 
     const offsetBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: this._createGPUBuffer(offset, GPUBufferUsage.UNIFORM),
     }
     const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([offsetBindGroupInput]);
 
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, colorBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, colorBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
@@ -429,23 +506,27 @@ class WebGPUContext {
     // CREATE UNIFORMS
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
-    const texture = this._createTexture(imageBitmap);
+    const texture = this._createTextureFromImage(imageBitmap);
     const sampler = this._createSampler();
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: transformationMatrixBuffer,
     }
     const projectionMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: projectionMatrixBuffer,
     }
     const textureBindGroupInput: IBindGroupInput = {
       type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
       texture: texture,
     }
     const samplerBindGroupInput: IBindGroupInput = {
       type: "sampler",
+      visibility: GPUShaderStage.FRAGMENT,
       sampler: sampler,
     }
     const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
@@ -457,9 +538,9 @@ class WebGPUContext {
     // CREATE COMMAND ENCODER
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget());
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, texCoordBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
@@ -477,10 +558,12 @@ class WebGPUContext {
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: transformationMatrixBuffer,
     }
     const projectionMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: projectionMatrixBuffer,
     }
   
@@ -490,9 +573,9 @@ class WebGPUContext {
 
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa, depthTexture));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setBindGroup(0, uniformBindGroup);
     passEncoder.draw(vertexCount, instanceCount);
@@ -518,22 +601,27 @@ class WebGPUContext {
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: transformationMatrixBuffer,
     }
     const projectionMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: projectionMatrixBuffer,
     }
     const normalMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
       buffer: normalMatrixBuffer,
     }
     const lightDirectionBindGroupInput: IBindGroupInput = { 
       type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
       buffer: lightDirectionBuffer,
     }
     const viewDirectionBindGroupInput: IBindGroupInput = {
       type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
       buffer: viewDirectionBuffer,
     }
   
@@ -545,9 +633,9 @@ class WebGPUContext {
    
     const commandEncoder = this._device.createCommandEncoder();
 
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(depthTexture));
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa, depthTexture));
     passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout]));
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
     passEncoder.setVertexBuffer(0, positionBuffer);
     passEncoder.setVertexBuffer(1, normalBuffer);
     passEncoder.setIndexBuffer(indexBuffer, "uint16");
@@ -555,6 +643,108 @@ class WebGPUContext {
     passEncoder.drawIndexed(objDataExtractor.indices.length, 1, 0, 0, 0);
     passEncoder.end();
 
+    this._device.queue.submit([commandEncoder.finish()]);
+  }
+
+  public async render_gaussian_blur(shaderCodeOne: string, shaderCodeTwo: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
+    transformationMatrix: Float32Array, projectionMatrix: Float32Array, imgUri: string) {
+    const response = await fetch(imgUri);
+    const blob = await response.blob();
+    const imageBitmap = await createImageBitmap(blob);
+
+    // CREATE UNIFORMS
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const texture = this._createTextureFromImage(imageBitmap);
+    const sampler = this._createSampler();
+    const passOneTexture = this._createTexture(texture.width, texture.height);
+
+    const imgSizeBuffer = this._createGPUBuffer(new Float32Array([imageBitmap.width, imageBitmap.height]), GPUBufferUsage.UNIFORM);
+    let kValues = []
+ 
+    const kernelSize = 8.0;
+    const sigma = 8.0;
+    let intensity = 0.0;
+    
+    for (let y = - kernelSize; y <= kernelSize; y += 1.0) {
+        let gaussian_value = 1.0 / Math.sqrt(2.0 * Math.PI * sigma * sigma) * Math.exp(-y * y / (2.0 * sigma * sigma));
+        intensity += gaussian_value;
+        kValues.push(gaussian_value);
+    }
+    const kernelBuffer = this._createGPUBuffer(new Float32Array(kValues), GPUBufferUsage.STORAGE);
+    const kernelSizeBuffer = this._createGPUBuffer(new Float32Array([kernelSize]), GPUBufferUsage.UNIFORM);
+
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: projectionMatrixBuffer,
+    }
+    const imageSizeBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: imgSizeBuffer,
+    }
+    const textureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: texture,
+    }
+    const samplerBindGroupInput: IBindGroupInput = {
+      type: "sampler",
+      visibility: GPUShaderStage.FRAGMENT,
+      sampler: sampler,
+    }
+    const kernelBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
+      readonly: true,
+      buffer: kernelBuffer,
+    }
+    const kernelSizeBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: kernelSizeBuffer,
+    }
+    const passOneTextureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: passOneTexture,
+    }
+
+
+    const { bindGroupLayout: uniformBindGroupLayoutPassOne, bindGroup: uniformBindGroupPassOne } = this._createUniformBindGroup([imageSizeBindGroupInput, textureBindGroupInput, samplerBindGroupInput, kernelBindGroupInput, kernelSizeBindGroupInput]);
+    const { bindGroupLayout: uniformBindGroupLayoutPassTwo, bindGroup: uniformBindGroupPassTwo } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, imageSizeBindGroupInput, passOneTextureBindGroupInput, samplerBindGroupInput, kernelBindGroupInput, kernelSizeBindGroupInput]);
+
+    // CREATE VERTEX BUFFERS
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+    const { buffer: texCoordBufferOne, layout: texCoordBufferLayoutOne } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 0 }, 2 * Float32Array.BYTES_PER_ELEMENT);
+    const { buffer: texCoordBufferTwo, layout: texCoordBufferLayoutTwo } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 1 }, 2 * Float32Array.BYTES_PER_ELEMENT);
+
+    // CREATE COMMAND ENCODER
+    const commandEncoder = this._device.createCommandEncoder();
+
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(passOneTexture, {r: 0.0, g: 0.0, b: 0.0, a: 0.0}));
+    passEncoder.setViewport(0, 0, texture.width, texture.height, 0, 1);
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCodeOne), [texCoordBufferLayoutOne], [uniformBindGroupLayoutPassOne], "rgba8unorm"));
+    passEncoder.setVertexBuffer(0, texCoordBufferOne);
+    passEncoder.setBindGroup(0, uniformBindGroupPassOne);
+    passEncoder.draw(vertexCount, instanceCount);
+    passEncoder.end();
+
+    const passEncoderTwo = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}));
+    passEncoderTwo.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+    passEncoderTwo.setPipeline(this._createPipeline(this._createShaderModule(shaderCodeTwo), [positionBufferLayout, texCoordBufferLayoutTwo], [uniformBindGroupLayoutPassTwo], "bgra8unorm"));
+    passEncoderTwo.setVertexBuffer(0, positionBuffer);
+    passEncoderTwo.setVertexBuffer(1, texCoordBufferTwo);
+    passEncoderTwo.setBindGroup(0, uniformBindGroupPassTwo);
+    passEncoderTwo.draw(vertexCount, instanceCount);
+    passEncoderTwo.end();
+   
     this._device.queue.submit([commandEncoder.finish()]);
   }
 }
