@@ -95,11 +95,31 @@ const App = () => {
     // const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
 
     // GAUSSIAN BLUR
+    // const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+    //   glMatrix.vec3.fromValues(0, 0, 10), 
+    //   glMatrix.vec3.fromValues(0,0,0), 
+    //   glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
+    // const orthProjMatrix = glMatrix.mat4.ortho(glMatrix.mat4.create(), -320.0, 320.0, 240.0, -240.0, -1000.0, 1000.0);
+    // const positions = new Float32Array([
+    //   100.0, -100.0, 0.0,
+    //   100.0, 100.0, 0.0,
+    //   -100.0, -100.0, 0.0,
+    //   -100.0, 100.0, 0.0
+    // ]);
+    // const texCoords = new Float32Array([
+    //   1.0, 0.0,
+    //   1.0, 1.0,
+    //   0.0, 0.0,
+    //   0.0, 1.0
+    // ]);
+    // webGpuContext.instance!.render_gaussian_blur(vertGaussianBlurWgsl, horizGaussianBlurWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(orthProjMatrix), "baboon.png");
+  
+    // VIDEO TEXTURE
     const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
-      glMatrix.vec3.fromValues(0, 0, 10), 
+      glMatrix.vec3.fromValues(100, 100, 100), 
       glMatrix.vec3.fromValues(0,0,0), 
-      glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
-    const orthProjMatrix = glMatrix.mat4.ortho(glMatrix.mat4.create(), -320.0, 320.0, 240.0, -240.0, -1000.0, 1000.0);
+      glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
     const positions = new Float32Array([
       100.0, -100.0, 0.0,
       100.0, 100.0, 0.0,
@@ -107,13 +127,19 @@ const App = () => {
       -100.0, 100.0, 0.0
     ]);
     const texCoords = new Float32Array([
-      1.0, 0.0,
-      1.0, 1.0,
-      0.0, 0.0,
-      0.0, 1.0
+      1.0,
+      0.0,
+
+      1.0,
+      1.0,
+
+      0.0,
+      0.0,
+
+      0.0,
+      1.0
     ]);
-    webGpuContext.instance!.render_gaussian_blur(vertGaussianBlurWgsl, horizGaussianBlurWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(orthProjMatrix), "baboon.png");
-  
+    webGpuContext.instance!.render_video_texture(textureWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "Firefox.mp4");
   }
 
   useEffect(() => {
@@ -221,54 +247,6 @@ class WebGPUContext {
     this._depthStencilState = depthStencilState;
     this._msaa = msaa;
   }
-
-  // private _createRenderTarget(depthTexture?: GPUTexture): GPURenderPassDescriptor {
-  //   const colorTexture = this._context.getCurrentTexture();
-  //   const colorTextureView = colorTexture.createView();
-
-  //   let colorAttachment: GPURenderPassColorAttachment;
-  //   if (this._msaa) {
-  //     const msaaTexture = this._device.createTexture({
-  //       size: { width: this._canvas.width, height: this._canvas.height },
-  //       sampleCount: this._msaa,
-  //       format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
-  //       usage: GPUTextureUsage.RENDER_ATTACHMENT,
-  //     });
-
-  //     colorAttachment = {
-  //       view: msaaTexture.createView(),
-  //       resolveTarget: colorTextureView,
-  //       clearValue: { r: 1, g: 0, b: 0, a: 1 },
-  //       loadOp: "clear",
-  //       storeOp: "store",
-  //     }
-  //   } else {
-  //     colorAttachment = {
-  //       view: colorTextureView,
-  //       clearValue: { r: 1, g: 0, b: 0, a: 1 },
-  //       loadOp: "clear",
-  //       storeOp: "store",
-  //     }
-  //   }
-
-  //   const renderPassDescriptor: GPURenderPassDescriptor = {
-  //     colorAttachments: [colorAttachment]
-  //   }
-
-  //   if (depthTexture) {
-  //     renderPassDescriptor.depthStencilAttachment = {
-  //       view: depthTexture.createView(),
-  //       depthClearValue: 1,
-  //       depthLoadOp: 'clear',
-  //       depthStoreOp: 'store',
-  //       stencilClearValue: 0,
-  //       stencilLoadOp: 'clear',
-  //       stencilStoreOp: 'store'
-  //     }
-  //   }
-
-  //   return renderPassDescriptor;
-  // }
 
   private _createRenderTarget(colorAttachmentTexture: GPUTexture, clearValue: {r: number, g: number, b: number, a: number}, msaa?: number, depthTexture?: GPUTexture): GPURenderPassDescriptor { 
     const textureView = colorAttachmentTexture.createView();
@@ -746,6 +724,111 @@ class WebGPUContext {
     passEncoderTwo.end();
    
     this._device.queue.submit([commandEncoder.finish()]);
+  }
+
+  public async render_video_texture(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
+    transformationMatrix: Float32Array, projectionMatrix: Float32Array, videoUrl: string) {
+    const videoLoader = await VideoLoader.create(videoUrl);
+    const videoTexture = this._createTexture(videoLoader.videoElement.videoWidth, videoLoader.videoElement.videoHeight);
+    videoLoader.videoElement.ontimeupdate = async (event) => {
+      const imagedData = await createImageBitmap(videoLoader.videoElement);
+      this._device.queue.copyExternalImageToTexture({ source: imagedData }, {texture: videoTexture}, {width: imagedData.width, height: imagedData.height});
+    }
+
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const sampler = this._createSampler();
+
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: projectionMatrixBuffer,
+    }
+    const textureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: videoTexture,
+    }
+    const samplerBindGroupInput: IBindGroupInput = {
+      type: "sampler",
+      visibility: GPUShaderStage.FRAGMENT,
+      sampler: sampler,
+    }
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
+
+    // CREATE VERTEX BUFFERS
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+    const { buffer: texCoordBuffer, layout: texCoordBufferLayout } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 1 }, 2 * Float32Array.BYTES_PER_ELEMENT);
+
+    // CREATE COMMAND ENCODER
+    const render = () => {
+      const commandEncoder = this._device.createCommandEncoder();
+
+      const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa));
+      passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+      passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
+      passEncoder.setVertexBuffer(0, positionBuffer);
+      passEncoder.setVertexBuffer(1, texCoordBuffer);
+      passEncoder.setBindGroup(0, uniformBindGroup);
+      passEncoder.draw(vertexCount, instanceCount);
+      passEncoder.end();
+
+      this._device.queue.submit([commandEncoder.finish()]);
+
+      requestAnimationFrame(render);
+    }
+    
+    requestAnimationFrame(render);
+  }
+}
+
+class VideoLoader {
+  private _videoElement: HTMLVideoElement;
+
+  public static async create(videoUrl: string): Promise<VideoLoader> { 
+    const videoElement = document.createElement("video");
+    videoElement.playsInline = true;
+    videoElement.muted = true;
+    videoElement.loop = true;
+
+    const videoReadyPromise = new Promise<void>((resolve) => {
+      let playing = false;
+      let timeUpdated = false;
+
+      videoElement.addEventListener("playing", () => {
+        playing = true;
+        if (playing && timeUpdated) {
+          resolve();
+        }
+      });
+
+      videoElement.addEventListener("timeupdate", () => {
+        timeUpdated = true;
+        if (playing && timeUpdated) {
+          resolve();
+        }
+      });
+    });
+
+    videoElement.src = videoUrl;
+    videoElement.play();
+
+    await videoReadyPromise;
+
+    return new VideoLoader(videoElement);
+  }
+
+  constructor(videoElement: HTMLVideoElement) {
+    this._videoElement = videoElement;
+  }
+
+  get videoElement(): HTMLVideoElement {
+    return this._videoElement;
   }
 }
 
