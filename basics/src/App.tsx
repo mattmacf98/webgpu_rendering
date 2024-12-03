@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import triangleWgsl from "./shaders/triangle.wgsl?raw";
 import textureWgsl from "./shaders/textured_shape.wgsl?raw";
+import fake3dWgsl from "./shaders/fake_3d.wgsl?raw";
 import vertGaussianBlurWgsl from "./shaders/vert_gaussian_blur.wgsl?raw";
 import horizGaussianBlurWgsl from "./shaders/horiz_gaussian_blur.wgsl?raw";
 import depthTestingWgsl from "./shaders/depth_testing.wgsl?raw";
@@ -8,7 +9,7 @@ import objModelWgsl from "./shaders/obj_model.wgsl?raw";
 import * as glMatrix from "gl-matrix";
 import ObjFileParser from "obj-file-parser";
 
-const App = () => {
+export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const render = async () => {
@@ -142,13 +143,37 @@ const App = () => {
     // webGpuContext.instance!.render_video_texture(textureWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "Firefox.mp4");
 
     //TEXT RENDERING
-    const translateMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(),
-            glMatrix.vec3.fromValues(0, 0, 500), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
+    //   const translateMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(),
+    //           glMatrix.vec3.fromValues(0, 0, 500), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
 
-    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(),
-        1.4, 640.0 / 480.0, 0.1, 1000.0);
+    //   const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(),
+    //       1.4, 640.0 / 480.0, 0.1, 1000.0);
 
-    webGpuContext.instance!.render_text(textureWgsl, Float32Array.from(translateMatrix), Float32Array.from(projectionMatrix), "Hello, World!", 320, 240, 0.5, "bold", "Arial", "white", 32, 28);
+    //   webGpuContext.instance!.render_text(textureWgsl, Float32Array.from(translateMatrix), Float32Array.from(projectionMatrix), "Hello, World!", 320, 240, 0.5, "bold", "Arial", "white", 32, 28);
+    // }
+
+    //FAKE 3D
+    const positions = new Float32Array([
+        1.0, -1.0, 0.0,
+        1.0, 1.0, 0.0,
+        -1.0, -1.0, 0.0,
+        -1.0, 1.0, 0.0
+    ]);
+
+    const texCoords = new Float32Array([
+        1.0,
+        1.0,
+
+        1.0,
+        0.0,
+
+        0.0,
+        1.0,
+
+        0.0,
+        0.0
+    ]);
+    webGpuContext.instance!.render_fake_3d(fake3dWgsl, 4, 1, positions, texCoords, "portrait.jpg", "depth.png");
   }
 
   useEffect(() => {
@@ -163,8 +188,6 @@ const App = () => {
     </div>
   )
 };
-
-export default App;
 
 
 interface WebGpuContextInitResult {
@@ -891,7 +914,82 @@ class WebGPUContext {
 
     this._device.queue.submit([commandEncoder.finish()]);
   }
+
+  public async render_fake_3d(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array, diffuseTextureUrl: string, depthTextureUrl:string) {
+    const diffuseImageBitmap = await createImageBitmap(await (await fetch(diffuseTextureUrl)).blob());
+    console.log("diffuse decoderd");
+    const depthImageBitmap = await createImageBitmap(await (await fetch(depthTextureUrl)).blob());
+
+    const diffuseTexture = this._createTextureFromImage(diffuseImageBitmap);
+    const depthTexture = this._createTextureFromImage(depthImageBitmap);
+    const sampler = this._createSampler();
+    const offset = new Float32Array([0.0, 0.0]);
+    const offsetUnifromBuffer = this._createGPUBuffer(offset, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+    const diffuseTextureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: diffuseTexture,
+    }
+
+    const depthTextureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: depthTexture,
+    }
+
+    const samplerBindGroupInput: IBindGroupInput = {
+      type: "sampler",
+      visibility: GPUShaderStage.FRAGMENT,
+      sampler: sampler,
+    }
+
+    const offsetBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: offsetUnifromBuffer,
+    }
+
+    
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([diffuseTextureBindGroupInput, depthTextureBindGroupInput, samplerBindGroupInput, offsetBindGroupInput]);
+
+
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(vertices, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+    const { buffer: texCoordBuffer, layout: texCoordBufferLayout } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 1 }, 2 * Float32Array.BYTES_PER_ELEMENT);
+
+    const render = async (offset: number[]) => {
+ 
+      const offsetUnifromBufferUpdate = this._createGPUBuffer(new Float32Array(offset), GPUBufferUsage.COPY_SRC);
+
+      const commandEncoder = this._device.createCommandEncoder();
+
+      commandEncoder.copyBufferToBuffer(offsetUnifromBufferUpdate, 0, offsetUnifromBuffer, 0, 2 * Float32Array.BYTES_PER_ELEMENT);
+      const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa));
+      passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+      passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
+      passEncoder.setVertexBuffer(0, positionBuffer);
+      passEncoder.setVertexBuffer(1, texCoordBuffer);
+      passEncoder.setBindGroup(0, uniformBindGroup);
+      passEncoder.draw(vertexCount, instanceCount);
+      passEncoder.end();
+
+      this._device.queue.submit([commandEncoder.finish()]);
+      await this._device.queue.onSubmittedWorkDone();
+      offsetUnifromBufferUpdate.destroy();
+    }
+
+    this._canvas.addEventListener("mousemove", (event) => {
+      const rect = this._canvas.getBoundingClientRect();
+      const mousePos = {x: (event.clientX - rect.left) / (rect.right - rect.left) * this._canvas.width, y: (event.clientY - rect.top) / (rect.bottom - rect.top) * this._canvas.height};
+      const offset  = { x: mousePos.x * 2.0 / this._canvas.width - 1.0, y: mousePos.y * 2.0 / this._canvas.height - 1.0 };
+
+      render([offset.x * 0.01, offset.y * 0.01]);
+    });
+    
+    requestAnimationFrame(() => render([0.0, 0.0]));
+  }
 }
+
 
 class VideoLoader {
   private _videoElement: HTMLVideoElement;
