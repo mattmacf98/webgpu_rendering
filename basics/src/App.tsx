@@ -115,31 +115,40 @@ const App = () => {
     // webGpuContext.instance!.render_gaussian_blur(vertGaussianBlurWgsl, horizGaussianBlurWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(orthProjMatrix), "baboon.png");
   
     // VIDEO TEXTURE
-    const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
-      glMatrix.vec3.fromValues(100, 100, 100), 
-      glMatrix.vec3.fromValues(0,0,0), 
-      glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
-    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
-    const positions = new Float32Array([
-      100.0, -100.0, 0.0,
-      100.0, 100.0, 0.0,
-      -100.0, -100.0, 0.0,
-      -100.0, 100.0, 0.0
-    ]);
-    const texCoords = new Float32Array([
-      1.0,
-      0.0,
+    // const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+    //   glMatrix.vec3.fromValues(100, 100, 100), 
+    //   glMatrix.vec3.fromValues(0,0,0), 
+    //   glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    // const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
+    // const positions = new Float32Array([
+    //   100.0, -100.0, 0.0,
+    //   100.0, 100.0, 0.0,
+    //   -100.0, -100.0, 0.0,
+    //   -100.0, 100.0, 0.0
+    // ]);
+    // const texCoords = new Float32Array([
+    //   1.0,
+    //   0.0,
 
-      1.0,
-      1.0,
+    //   1.0,
+    //   1.0,
 
-      0.0,
-      0.0,
+    //   0.0,
+    //   0.0,
 
-      0.0,
-      1.0
-    ]);
-    webGpuContext.instance!.render_video_texture(textureWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "Firefox.mp4");
+    //   0.0,
+    //   1.0
+    // ]);
+    // webGpuContext.instance!.render_video_texture(textureWgsl, 4, 1, positions, texCoords, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), "Firefox.mp4");
+
+    //TEXT RENDERING
+    const translateMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(),
+            glMatrix.vec3.fromValues(0, 0, 500), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 1.0, 0.0));
+
+    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(),
+        1.4, 640.0 / 480.0, 0.1, 1000.0);
+
+    webGpuContext.instance!.render_text(textureWgsl, Float32Array.from(translateMatrix), Float32Array.from(projectionMatrix), "Hello, World!", 320, 240, 0.5, "bold", "Arial", "white", 32, 28);
   }
 
   useEffect(() => {
@@ -367,14 +376,17 @@ class WebGPUContext {
     return shaderModule;
   }
 
-  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], colorFormat: GPUTextureFormat): GPURenderPipeline {
+  private _createPipeline(shaderModule: GPUShaderModule, vertexBuffers: GPUVertexBufferLayout[], uniformBindGroups: GPUBindGroupLayout[], colorFormat: GPUTextureFormat, blend?: GPUBlendState): GPURenderPipeline {
     // layour
     const pipelineLayoutDescriptor: GPUPipelineLayoutDescriptor = {bindGroupLayouts: uniformBindGroups};
     const layout = this._device.createPipelineLayout(pipelineLayoutDescriptor);
 
     //TODO: parametrize?
-    const colorState = {
+    const colorState: GPUColorTargetState = {
       format: colorFormat,
+    }
+    if (blend) {
+      colorState.blend = blend;
     }
 
     const pipelineDescriptor: GPURenderPipelineDescriptor = {
@@ -784,6 +796,100 @@ class WebGPUContext {
     }
     
     requestAnimationFrame(render);
+  }
+
+  public async render_text(shaderCode: string, transformationMatrix: Float32Array, projectionMatrix: Float32Array,
+     text: string, width: number, height: number, alpha: number, fontWeight: string, fontFamily: string, fillStyle: string, fontSize: number, textLength: number) {
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0,0, width, height);
+    ctx.globalAlpha = alpha;
+    ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    ctx.fillStyle = fillStyle;
+    const textMeasure = ctx.measureText(text);
+
+    ctx.fillText(text, 0, textLength);
+
+    const neareastPowerof2 = 1 << (32 - Math.clz32(Math.ceil(textMeasure.width)));
+    const texture = this._createTexture(neareastPowerof2, fontSize);
+    this._device.queue.copyExternalImageToTexture({ source: canvas, origin: {x: 0, y:0}}, {texture: texture}, {width: neareastPowerof2, height: fontSize});
+
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const sampler = this._createSampler();
+
+    const transformationMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: transformationMatrixBuffer,
+    }
+    const projectionMatrixBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.VERTEX,
+      buffer: projectionMatrixBuffer,
+    }
+    const textureBindGroupInput: IBindGroupInput = {
+      type: "texture",
+      visibility: GPUShaderStage.FRAGMENT,
+      texture: texture,
+    }
+    const samplerBindGroupInput: IBindGroupInput = {
+      type: "sampler",
+      visibility: GPUShaderStage.FRAGMENT,
+      sampler: sampler,
+    }
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, textureBindGroupInput, samplerBindGroupInput]);
+
+    const positions = new Float32Array([
+        textMeasure.width *0.5, -16.0, 0.0,
+        textMeasure.width*0.5, 16.0, 0.0,
+        -textMeasure.width*0.5, -16.0, 0.0,
+        -textMeasure.width*0.5, 16.0, 0.0
+    ]);
+
+    const w = textMeasure.width / neareastPowerof2;
+    const texCoords = new Float32Array([
+      w,
+      1.0,
+      
+      w,
+      0.0,
+
+      0.0,
+      1.0,
+
+      0.0,
+      0.0
+    ]);
+
+    const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(positions, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
+    const { buffer: texCoordBuffer, layout: texCoordBufferLayout } = this._createSingleAttributeVertexBuffer(texCoords, { format: "float32x2", offset: 0, shaderLocation: 1 }, 2 * Float32Array.BYTES_PER_ELEMENT);
+
+    const blend: GPUBlendState = {
+      color: {
+        srcFactor: "one",
+        dstFactor: "one-minus-src",
+        operation: "add",
+      },
+      alpha: {
+        srcFactor: "one",
+        dstFactor: "one-minus-src",
+        operation: "add",
+      }
+    }
+
+    const commandEncoder = this._device.createCommandEncoder();
+
+    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa));
+    passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, texCoordBufferLayout], [uniformBindGroupLayout], "bgra8unorm", blend));
+    passEncoder.setVertexBuffer(0, positionBuffer);
+    passEncoder.setVertexBuffer(1, texCoordBuffer);
+    passEncoder.setBindGroup(0, uniformBindGroup);
+    passEncoder.draw(4, 1);
+    passEncoder.end();
+
+    this._device.queue.submit([commandEncoder.finish()]);
   }
 }
 
