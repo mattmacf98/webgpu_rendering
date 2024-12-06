@@ -4,6 +4,10 @@ var<uniform> modelView: mat4x4<f32>;
 var<uniform> projection: mat4x4<f32>;
 @group(0) @binding(2)
 var<uniform> normalMatrix: mat4x4<f32>;
+@group(0) @binding(3)
+var<uniform> lightDirection: vec3<f32>;
+@group(0) @binding(4)
+var<uniform> viewDirection: vec3<f32>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -43,11 +47,6 @@ fn vs_main(
     out.clip_position = projection * modelView * vec4<f32>(inPos, 1.0);
     return out;
 }
-
-@group(0) @binding(3)
-var<uniform> lightDirection: vec3<f32>;
-@group(0) @binding(4)
-var<uniform> viewDirection: vec3<f32>;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

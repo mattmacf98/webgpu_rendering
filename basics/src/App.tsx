@@ -14,13 +14,18 @@ export const App: React.FC = () => {
 
   const render = async () => {
     const primitiveState: GPUPrimitiveState = {
-      topology: 'triangle-strip' as GPUPrimitiveTopology,
+      topology: 'triangle-list' as GPUPrimitiveTopology,
       frontFace: 'ccw' as GPUFrontFace,
       cullMode: 'none' as GPUCullMode,
     }
     const webGpuContext = await WebGPUContext.create({
       canvas: canvasRef.current!,
-      primitiveState
+      primitiveState,
+      depthStencilState: {
+        depthWriteEnabled: true,
+        depthCompare: 'less' as GPUCompareFunction,
+        format: 'depth24plus-stencil8' as GPUTextureFormat,
+      }
     });
     if (webGpuContext.error) {
       console.error(webGpuContext.error);
@@ -88,12 +93,14 @@ export const App: React.FC = () => {
     // webGpuContext.instance!.render_depth_testing(depthTestingWgsl, 10, 1, positions, Float32Array.from(transformationMatrix), Float32Array.from(projectionMatrix), primitiveState, depthStencilState);
 
     //MODEL LOADING
-    // const modelViewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(3, 3, 3), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
-    // const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
-    // const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
-    // const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
-    // const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
-    // const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+    const modelViewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), glMatrix.vec3.fromValues(3, 3, 3), glMatrix.vec3.fromValues(0, 0, 0), glMatrix.vec3.fromValues(0.0, 0.0, 1.0));
+    const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, 640.0 / 480.0, 0.1, 1000.0);
+    const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
+    const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+    const lightDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+    const viewDirection = glMatrix.vec3.fromValues(-1, -1, -1);
+
+    webGpuContext.instance!.render_obj_model(objModelWgsl, "teapot.obj", Float32Array.from(modelViewMatrix), Float32Array.from(projectionMatrix), Float32Array.from(normalMatrix), Float32Array.from(lightDirection), Float32Array.from(viewDirection));
 
     // GAUSSIAN BLUR
     // const transformationMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
@@ -153,27 +160,27 @@ export const App: React.FC = () => {
     // }
 
     //FAKE 3D
-    const positions = new Float32Array([
-        1.0, -1.0, 0.0,
-        1.0, 1.0, 0.0,
-        -1.0, -1.0, 0.0,
-        -1.0, 1.0, 0.0
-    ]);
+    // const positions = new Float32Array([
+    //     1.0, -1.0, 0.0,
+    //     1.0, 1.0, 0.0,
+    //     -1.0, -1.0, 0.0,
+    //     -1.0, 1.0, 0.0
+    // ]);
 
-    const texCoords = new Float32Array([
-        1.0,
-        1.0,
+    // const texCoords = new Float32Array([
+    //     1.0,
+    //     1.0,
 
-        1.0,
-        0.0,
+    //     1.0,
+    //     0.0,
 
-        0.0,
-        1.0,
+    //     0.0,
+    //     1.0,
 
-        0.0,
-        0.0
-    ]);
-    webGpuContext.instance!.render_fake_3d(fake3dWgsl, 4, 1, positions, texCoords, "portrait.jpg", "depth.png");
+    //     0.0,
+    //     0.0
+    // ]);
+    // webGpuContext.instance!.render_fake_3d(fake3dWgsl, 4, 1, positions, texCoords, "portrait.jpg", "depth.png");
   }
 
   useEffect(() => {
@@ -183,8 +190,8 @@ export const App: React.FC = () => {
   }, []);
 
   return (
-    <div>
-      <canvas ref={canvasRef} width={640} height={480}></canvas>
+    <div style={{display: "flex", flexDirection: "column", height: "100%", position: "relative"}}>
+      <canvas ref={canvasRef} width={640} height={480} style={{flexGrow: 1, flexShrink: 0}}></canvas>
     </div>
   )
 };
@@ -604,7 +611,7 @@ class WebGPUContext {
     const objText = await objBlob.text();
     const objDataExtractor = new ObjDataExtractor(objText);
 
-    const depthTexture = this._createDepthTexture();
+    let depthTexture = this._createDepthTexture();
 
     const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
     const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
@@ -629,12 +636,12 @@ class WebGPUContext {
     }
     const lightDirectionBindGroupInput: IBindGroupInput = { 
       type: "buffer",
-      visibility: GPUShaderStage.FRAGMENT,
+      visibility: GPUShaderStage.VERTEX,
       buffer: lightDirectionBuffer,
     }
     const viewDirectionBindGroupInput: IBindGroupInput = {
       type: "buffer",
-      visibility: GPUShaderStage.FRAGMENT,
+      visibility: GPUShaderStage.VERTEX,
       buffer: viewDirectionBuffer,
     }
   
@@ -643,20 +650,48 @@ class WebGPUContext {
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.vertexPositions, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: normalBuffer, layout: normalBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.normals, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const indexBuffer = this._createGPUBuffer(objDataExtractor.indices, GPUBufferUsage.INDEX);
+
+    const render = () => {
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      const currenCanvasWidth = this._canvas.clientWidth * devicePixelRatio;
+      const currentCanvasHeight = this._canvas.clientHeight * devicePixelRatio;
+
+
+      let projectionMatrixUpdateBuffer = null;
+      if (currenCanvasWidth != this._canvas.width || currentCanvasHeight != this._canvas.height) { 
+        this._canvas.width = currenCanvasWidth;
+        this._canvas.height = currentCanvasHeight;
+
+        depthTexture.destroy();
+        depthTexture = this._createDepthTexture();
+
+        const updateProjectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, this._canvas.width / this._canvas.height, 0.1, 1000.0);
+        projectionMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(updateProjectionMatrix), GPUBufferUsage.COPY_SRC);
+      }
+
+      const commandEncoder = this._device.createCommandEncoder();
+      if (projectionMatrixUpdateBuffer != null) {
+        commandEncoder.copyBufferToBuffer(projectionMatrixBuffer, 0, projectionMatrixBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+      }
+
+      const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa, depthTexture));
+      passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
+      passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
+      passEncoder.setVertexBuffer(0, positionBuffer);
+      passEncoder.setVertexBuffer(1, normalBuffer);
+      passEncoder.setIndexBuffer(indexBuffer, "uint16");
+      passEncoder.setBindGroup(0, uniformBindGroup);
+      passEncoder.drawIndexed(objDataExtractor.indices.length, 1, 0, 0, 0);
+      passEncoder.end();
+  
+      this._device.queue.submit([commandEncoder.finish()]);
+    }
    
-    const commandEncoder = this._device.createCommandEncoder();
-
-    const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa, depthTexture));
-    passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
-    passEncoder.setPipeline(this._createPipeline(this._createShaderModule(shaderCode), [positionBufferLayout, normalBufferLayout], [uniformBindGroupLayout], "bgra8unorm"));
-    passEncoder.setVertexBuffer(0, positionBuffer);
-    passEncoder.setVertexBuffer(1, normalBuffer);
-    passEncoder.setIndexBuffer(indexBuffer, "uint16");
-    passEncoder.setBindGroup(0, uniformBindGroup);
-    passEncoder.drawIndexed(objDataExtractor.indices.length, 1, 0, 0, 0);
-    passEncoder.end();
-
-    this._device.queue.submit([commandEncoder.finish()]);
+    requestAnimationFrame(render);
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(render);
+    });
+    resizeObserver.observe(this._canvas);
   }
 
   public async render_gaussian_blur(shaderCodeOne: string, shaderCodeTwo: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
