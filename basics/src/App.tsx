@@ -613,11 +613,11 @@ class WebGPUContext {
 
     let depthTexture = this._createDepthTexture();
 
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
-    const normalMatrixBuffer = this._createGPUBuffer(normalMatrix, GPUBufferUsage.UNIFORM);
-    const lightDirectionBuffer = this._createGPUBuffer(lightDirection, GPUBufferUsage.UNIFORM);
-    const viewDirectionBuffer = this._createGPUBuffer(viewDirection, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const normalMatrixBuffer = this._createGPUBuffer(normalMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const lightDirectionBuffer = this._createGPUBuffer(lightDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const viewDirectionBuffer = this._createGPUBuffer(viewDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
@@ -651,6 +651,8 @@ class WebGPUContext {
     const { buffer: normalBuffer, layout: normalBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.normals, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const indexBuffer = this._createGPUBuffer(objDataExtractor.indices, GPUBufferUsage.INDEX);
 
+    const arcBall = new Arcball(5.0);
+
     const render = () => {
       const devicePixelRatio = window.devicePixelRatio || 1;
       const currenCanvasWidth = this._canvas.clientWidth * devicePixelRatio;
@@ -669,10 +671,25 @@ class WebGPUContext {
         projectionMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(updateProjectionMatrix), GPUBufferUsage.COPY_SRC);
       }
 
+      const modelViewMatrix = arcBall.getMatrices();
+      const modelViewMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(modelViewMatrix), GPUBufferUsage.COPY_SRC);
+
+      const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
+      const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+      const normalMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(normalMatrix), GPUBufferUsage.COPY_SRC);
+
+      const viewDirection = glMatrix.vec3.fromValues(-arcBall.forward[0], -arcBall.forward[1], -arcBall.forward[2]);
+      const viewDirectionUpdateBuffer = this._createGPUBuffer(Float32Array.from(viewDirection), GPUBufferUsage.COPY_SRC);
+
       const commandEncoder = this._device.createCommandEncoder();
       if (projectionMatrixUpdateBuffer != null) {
-        commandEncoder.copyBufferToBuffer(projectionMatrixBuffer, 0, projectionMatrixBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+        commandEncoder.copyBufferToBuffer(projectionMatrixUpdateBuffer, 0, projectionMatrixBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
       }
+  
+      commandEncoder.copyBufferToBuffer(modelViewMatrixUpdateBuffer, 0, transformationMatrixBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+      commandEncoder.copyBufferToBuffer(normalMatrixUpdateBuffer, 0, normalMatrixBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+      commandEncoder.copyBufferToBuffer(viewDirectionUpdateBuffer, 0, viewDirectionBuffer, 0, 3 * Float32Array.BYTES_PER_ELEMENT);
+      commandEncoder.copyBufferToBuffer(viewDirectionUpdateBuffer, 0, lightDirectionBuffer, 0, 3 * Float32Array.BYTES_PER_ELEMENT);
 
       const passEncoder = commandEncoder.beginRenderPass(this._createRenderTarget(this._context.getCurrentTexture(), {r: 1.0, g: 0.0, b: 0.0, a: 1.0}, this._msaa, depthTexture));
       passEncoder.setViewport(0, 0, this._canvas.width, this._canvas.height, 0, 1);
@@ -692,6 +709,7 @@ class WebGPUContext {
       requestAnimationFrame(render);
     });
     resizeObserver.observe(this._canvas);
+    new Controls(this._canvas, arcBall, render);
   }
 
   public async render_gaussian_blur(shaderCodeOne: string, shaderCodeTwo: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
@@ -1120,5 +1138,160 @@ class ObjDataExtractor {
 
   public get normals(): Float32Array {
     return this._normals;
+  }
+}
+
+
+enum DragType {
+  NONE,
+  YAW_PITCH,
+  ROLL
+}
+class Controls {
+  private _canvas: HTMLCanvasElement;
+  private _prevX: number;
+  private _prevY: number;
+  private _draggingType: DragType;
+  private _arcball: Arcball;
+  private _render: () => void;
+
+  constructor(canvas: HTMLCanvasElement, arcBall: Arcball, render: () => void) {
+    this._arcball = arcBall;
+    this._canvas = canvas;
+    this._prevX = 0;
+    this._prevY = 0;
+    this._draggingType = DragType.NONE;
+    this._render = render;
+
+    this._canvas.onmousedown = (event: MouseEvent) => {
+      const rect = this._canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      const width = rect.right - rect.left;
+      const height = rect.bottom - rect.top;
+      let radius = width;
+
+      if (height < radius) {
+        radius = height;
+      }
+
+      radius *= 0.5;
+      const originX = width * 0.5;
+      const originY = height * 0.5;
+
+      this._prevX = (x - originX) / radius;
+      this._prevY = (originY - y) / radius;
+      if ((this._prevX * this._prevX + this._prevY * this._prevY) <= 0.64) {
+        this._draggingType = DragType.YAW_PITCH;
+      } else {
+        this._draggingType = DragType.ROLL;
+      }
+    }
+
+    this._canvas.onmousemove = (event: MouseEvent) => {
+      const rect = this._canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      const width = rect.right - rect.left;
+      const height = rect.bottom - rect.top;
+      let radius = width;
+
+      if (height < radius) {
+        radius = height;
+      }
+
+      radius *= 0.5;
+      const originX = width * 0.5;
+      const originY = height * 0.5;
+
+      const currentX = (x - originX) / radius;
+      const currentY = (originY - y) / radius;
+
+      if (this._draggingType == DragType.YAW_PITCH) {
+        this._arcball.yawPith(this._prevX, this._prevY, currentX, currentY);
+      } else if (this._draggingType == DragType.ROLL) {
+        this._arcball.roll(this._prevX, this._prevY, currentX, currentY);
+      }
+
+      this._prevX = currentX;
+      this._prevY = currentY;
+      
+      requestAnimationFrame(this._render);
+    }
+
+    canvas.onmouseup = (event: MouseEvent) => {
+      this._draggingType = DragType.NONE;
+    }
+  }
+
+  get arcball() {
+    return this._arcball;
+  }
+
+  public getMatrices() {
+    return this._arcball.getMatrices();
+  }
+}
+
+class Arcball {
+  private _radius: number;
+  private _forward: glMatrix.vec4;
+  private _up: glMatrix.vec4;
+  private _currentRotation: glMatrix.mat4;
+
+  constructor(radius: number) {
+    this._radius = radius;
+    this._forward = glMatrix.vec4.fromValues(this._radius, 0, 0, 0);
+    this._up = glMatrix.vec4.fromValues(0, 0, 1, 0);
+    this._currentRotation = glMatrix.mat4.create();
+  }
+
+  get forward() {
+    return this._forward;
+  }
+
+  public yawPith(originalX: number, originalY: number, newX: number, newY: number): void {
+    const originalPoint = glMatrix.vec3.fromValues(1.0, originalX, originalY);
+    const newPoint = glMatrix.vec3.fromValues(1.0, newX, newY);
+
+    let rotationAxisVec3 = glMatrix.vec3.cross(glMatrix.vec3.create(), originalPoint, newPoint);
+    let rotationAxisVec4 = glMatrix.vec4.fromValues(rotationAxisVec3[0], rotationAxisVec3[1], rotationAxisVec3[2], 0.0);
+    rotationAxisVec4 = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), rotationAxisVec4, this._currentRotation);
+    rotationAxisVec3 = glMatrix.vec3.normalize(glMatrix.vec3.create(), [rotationAxisVec4[0], rotationAxisVec4[1], rotationAxisVec4[2]]);
+
+    const sin = glMatrix.vec3.length(rotationAxisVec3) / (glMatrix.vec3.length(originalPoint) * glMatrix.vec3.length(newPoint));
+    const rotationMatrix = glMatrix.mat4.fromRotation(glMatrix.mat4.create(), Math.asin(sin) * -0.03, rotationAxisVec3);
+
+    if (rotationMatrix !== null) {
+      this._currentRotation = glMatrix.mat4.multiply(glMatrix.mat4.create(), rotationMatrix, this._currentRotation);
+      this._forward = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), this._forward, rotationMatrix);
+      this._up = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), this._up, rotationMatrix);
+    }
+  }
+
+  public roll(originalX: number, originalY: number, newX: number, newY: number): void {
+    const originalVec = glMatrix.vec3.fromValues(originalX, originalY, 0.0);
+    const newVec = glMatrix.vec3.fromValues(newX, newY, 0.0);
+    const crossProd = glMatrix.vec3.cross(glMatrix.vec3.create(), originalVec, newVec);
+
+    const cos = glMatrix.vec3.dot(glMatrix.vec3.normalize(glMatrix.vec3.create(), originalVec), glMatrix.vec3.normalize(glMatrix.vec3.create(), newVec));
+
+    const rad = Math.acos(Math.min(cos, 1.0)) * Math.sign(crossProd[2]);
+
+    const rotationMatrix = glMatrix.mat4.fromRotation(glMatrix.mat4.create(), -rad, glMatrix.vec3.fromValues(this._forward[0], this._forward[1], this._forward[2]));
+
+    this._currentRotation = glMatrix.mat4.multiply(glMatrix.mat4.create(), rotationMatrix, this._currentRotation);
+    this._up = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), this._up, this._currentRotation);
+  }
+
+  public getMatrices() {
+    const modelViewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), 
+    glMatrix.vec3.fromValues(this._forward[0], this._forward[1], this._forward[2]), 
+    glMatrix.vec3.fromValues(0, 0, 0), 
+    glMatrix.vec3.fromValues(this._up[0], this._up[1], this._up[2]));
+    
+    return modelViewMatrix;
   }
 }
