@@ -333,7 +333,11 @@ class WebGPUContext {
     return renderPassDescriptor;
   }
 
-  private _createGPUBuffer(data: Float32Array | Uint16Array, usage: GPUBufferUsageFlags): GPUBuffer {
+  public get device(): GPUDevice {
+    return this._device;
+  }
+
+  public createGPUBuffer(data: Float32Array | Uint16Array | Uint32Array, usage: GPUBufferUsageFlags): GPUBuffer {
     const bufferDesc: GPUBufferDescriptor = {
       size: data.byteLength,
       usage: usage,
@@ -346,6 +350,9 @@ class WebGPUContext {
       writeArray.set(data);
     } else if (data instanceof Uint16Array) {
       const writeArray = new Uint16Array(buffer.getMappedRange());
+      writeArray.set(data);
+    } else if (data instanceof Uint32Array) {
+      const writeArray = new Uint32Array(buffer.getMappedRange());
       writeArray.set(data);
     }
   
@@ -360,7 +367,7 @@ class WebGPUContext {
       attributes: [attributeDesc],
     }
 
-    const buffer = this._createGPUBuffer(vertexAttributeData, GPUBufferUsage.VERTEX);
+    const buffer = this.createGPUBuffer(vertexAttributeData, GPUBufferUsage.VERTEX);
 
     return { buffer, layout };
   }
@@ -499,7 +506,7 @@ class WebGPUContext {
     const offsetBindGroupInput: IBindGroupInput = {
       type: "buffer",
       visibility: GPUShaderStage.VERTEX,
-      buffer: this._createGPUBuffer(offset, GPUBufferUsage.UNIFORM),
+      buffer: this.createGPUBuffer(offset, GPUBufferUsage.UNIFORM),
     }
     const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([offsetBindGroupInput]);
 
@@ -524,8 +531,8 @@ class WebGPUContext {
     const imageBitmap = await createImageBitmap(blob);
 
     // CREATE UNIFORMS
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const texture = this._createTextureFromImage(imageBitmap);
     const sampler = this._createSampler();
 
@@ -573,8 +580,8 @@ class WebGPUContext {
   public render_depth_testing(shaderCode: string, vertexCount: number, instanceCount: number, vertices: Float32Array, transformationMatrix: Float32Array, projectionMatrix: Float32Array) {
     const depthTexture = this._createDepthTexture();
 
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
@@ -613,11 +620,12 @@ class WebGPUContext {
 
     let depthTexture = this._createDepthTexture();
 
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const normalMatrixBuffer = this._createGPUBuffer(normalMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const lightDirectionBuffer = this._createGPUBuffer(lightDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-    const viewDirectionBuffer = this._createGPUBuffer(viewDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const normalMatrixBuffer = this.createGPUBuffer(normalMatrix, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const lightDirectionBuffer = this.createGPUBuffer(lightDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const viewDirectionBuffer = this.createGPUBuffer(viewDirection, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const selectionBuffer = this.createGPUBuffer(new Uint32Array([0]), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
@@ -644,12 +652,17 @@ class WebGPUContext {
       visibility: GPUShaderStage.VERTEX,
       buffer: viewDirectionBuffer,
     }
+    const selectionBindGroupInput: IBindGroupInput = {
+      type: "buffer",
+      visibility: GPUShaderStage.FRAGMENT,
+      buffer: selectionBuffer,
+    }
   
-    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, normalMatrixBindGroupInput, lightDirectionBindGroupInput, viewDirectionBindGroupInput]);
+    const { bindGroupLayout: uniformBindGroupLayout, bindGroup: uniformBindGroup } = this._createUniformBindGroup([transformationMatrixBindGroupInput, projectionMatrixBindGroupInput, normalMatrixBindGroupInput, lightDirectionBindGroupInput, viewDirectionBindGroupInput, selectionBindGroupInput]);
 
     const { buffer: positionBuffer, layout: positionBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.vertexPositions, { format: "float32x3", offset: 0, shaderLocation: 0 }, 3 * Float32Array.BYTES_PER_ELEMENT);
     const { buffer: normalBuffer, layout: normalBufferLayout } = this._createSingleAttributeVertexBuffer(objDataExtractor.normals, { format: "float32x3", offset: 0, shaderLocation: 1 }, 3 * Float32Array.BYTES_PER_ELEMENT);
-    const indexBuffer = this._createGPUBuffer(objDataExtractor.indices, GPUBufferUsage.INDEX);
+    const indexBuffer = this.createGPUBuffer(objDataExtractor.indices, GPUBufferUsage.INDEX);
 
     const arcBall = new Arcball(5.0);
 
@@ -657,7 +670,6 @@ class WebGPUContext {
       const devicePixelRatio = window.devicePixelRatio || 1;
       const currenCanvasWidth = this._canvas.clientWidth * devicePixelRatio;
       const currentCanvasHeight = this._canvas.clientHeight * devicePixelRatio;
-
 
       let projectionMatrixUpdateBuffer = null;
       if (currenCanvasWidth != this._canvas.width || currentCanvasHeight != this._canvas.height) { 
@@ -668,18 +680,18 @@ class WebGPUContext {
         depthTexture = this._createDepthTexture();
 
         const updateProjectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, this._canvas.width / this._canvas.height, 0.1, 1000.0);
-        projectionMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(updateProjectionMatrix), GPUBufferUsage.COPY_SRC);
+        projectionMatrixUpdateBuffer = this.createGPUBuffer(Float32Array.from(updateProjectionMatrix), GPUBufferUsage.COPY_SRC);
       }
 
       const modelViewMatrix = arcBall.getMatrices();
-      const modelViewMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(modelViewMatrix), GPUBufferUsage.COPY_SRC);
+      const modelViewMatrixUpdateBuffer = this.createGPUBuffer(Float32Array.from(modelViewMatrix), GPUBufferUsage.COPY_SRC);
 
       const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
       const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
-      const normalMatrixUpdateBuffer = this._createGPUBuffer(Float32Array.from(normalMatrix), GPUBufferUsage.COPY_SRC);
+      const normalMatrixUpdateBuffer = this.createGPUBuffer(Float32Array.from(normalMatrix), GPUBufferUsage.COPY_SRC);
 
       const viewDirection = glMatrix.vec3.fromValues(-arcBall.forward[0], -arcBall.forward[1], -arcBall.forward[2]);
-      const viewDirectionUpdateBuffer = this._createGPUBuffer(Float32Array.from(viewDirection), GPUBufferUsage.COPY_SRC);
+      const viewDirectionUpdateBuffer = this.createGPUBuffer(Float32Array.from(viewDirection), GPUBufferUsage.COPY_SRC);
 
       const commandEncoder = this._device.createCommandEncoder();
       if (projectionMatrixUpdateBuffer != null) {
@@ -709,7 +721,8 @@ class WebGPUContext {
       requestAnimationFrame(render);
     });
     resizeObserver.observe(this._canvas);
-    new Controls(this._canvas, arcBall, render);
+    const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), transformationMatrix);
+    new Controls(this._canvas, arcBall, projectionMatrix, modelViewMatrixInverse, this, selectionBuffer, render);
   }
 
   public async render_gaussian_blur(shaderCodeOne: string, shaderCodeTwo: string, vertexCount: number, instanceCount: number, vertices: Float32Array, texCoords: Float32Array,
@@ -719,13 +732,13 @@ class WebGPUContext {
     const imageBitmap = await createImageBitmap(blob);
 
     // CREATE UNIFORMS
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const texture = this._createTextureFromImage(imageBitmap);
     const sampler = this._createSampler();
     const passOneTexture = this._createTexture(texture.width, texture.height);
 
-    const imgSizeBuffer = this._createGPUBuffer(new Float32Array([imageBitmap.width, imageBitmap.height]), GPUBufferUsage.UNIFORM);
+    const imgSizeBuffer = this.createGPUBuffer(new Float32Array([imageBitmap.width, imageBitmap.height]), GPUBufferUsage.UNIFORM);
     let kValues = []
  
     const kernelSize = 8.0;
@@ -737,8 +750,8 @@ class WebGPUContext {
         intensity += gaussian_value;
         kValues.push(gaussian_value);
     }
-    const kernelBuffer = this._createGPUBuffer(new Float32Array(kValues), GPUBufferUsage.STORAGE);
-    const kernelSizeBuffer = this._createGPUBuffer(new Float32Array([kernelSize]), GPUBufferUsage.UNIFORM);
+    const kernelBuffer = this.createGPUBuffer(new Float32Array(kValues), GPUBufferUsage.STORAGE);
+    const kernelSizeBuffer = this.createGPUBuffer(new Float32Array([kernelSize]), GPUBufferUsage.UNIFORM);
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
       type: "buffer",
@@ -823,8 +836,8 @@ class WebGPUContext {
       this._device.queue.copyExternalImageToTexture({ source: imagedData }, {texture: videoTexture}, {width: imagedData.width, height: imagedData.height});
     }
 
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const sampler = this._createSampler();
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
@@ -890,8 +903,8 @@ class WebGPUContext {
     const texture = this._createTexture(neareastPowerof2, fontSize);
     this._device.queue.copyExternalImageToTexture({ source: canvas, origin: {x: 0, y:0}}, {texture: texture}, {width: neareastPowerof2, height: fontSize});
 
-    const transformationMatrixBuffer = this._createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
-    const projectionMatrixBuffer = this._createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
+    const transformationMatrixBuffer = this.createGPUBuffer(transformationMatrix, GPUBufferUsage.UNIFORM);
+    const projectionMatrixBuffer = this.createGPUBuffer(projectionMatrix, GPUBufferUsage.UNIFORM);
     const sampler = this._createSampler();
 
     const transformationMatrixBindGroupInput: IBindGroupInput = {
@@ -977,7 +990,7 @@ class WebGPUContext {
     const depthTexture = this._createTextureFromImage(depthImageBitmap);
     const sampler = this._createSampler();
     const offset = new Float32Array([0.0, 0.0]);
-    const offsetUnifromBuffer = this._createGPUBuffer(offset, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+    const offsetUnifromBuffer = this.createGPUBuffer(offset, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
     const diffuseTextureBindGroupInput: IBindGroupInput = {
       type: "texture",
@@ -1012,7 +1025,7 @@ class WebGPUContext {
 
     const render = async (offset: number[]) => {
  
-      const offsetUnifromBufferUpdate = this._createGPUBuffer(new Float32Array(offset), GPUBufferUsage.COPY_SRC);
+      const offsetUnifromBufferUpdate = this.createGPUBuffer(new Float32Array(offset), GPUBufferUsage.COPY_SRC);
 
       const commandEncoder = this._device.createCommandEncoder();
 
@@ -1153,14 +1166,24 @@ class Controls {
   private _prevY: number;
   private _draggingType: DragType;
   private _arcball: Arcball;
+  private _projectionMatrix: glMatrix.mat4;
+  private _modelViewMatrixInverse: glMatrix.mat4;
+  private _webGPUContext: WebGPUContext;
+  private _selectionBuffer: GPUBuffer;
   private _render: () => void;
 
-  constructor(canvas: HTMLCanvasElement, arcBall: Arcball, render: () => void) {
+  constructor(canvas: HTMLCanvasElement, arcBall: Arcball, projectionMatrix: glMatrix.mat4,
+     modelViewMatrixInverse: glMatrix.mat4, webGPUContext: WebGPUContext, selectionBuffer: GPUBuffer, render: () => void) {
     this._arcball = arcBall;
     this._canvas = canvas;
     this._prevX = 0;
     this._prevY = 0;
     this._draggingType = DragType.NONE;
+    this._projectionMatrix = projectionMatrix;
+    this._modelViewMatrixInverse = modelViewMatrixInverse;
+    this._webGPUContext = webGPUContext;
+    this._selectionBuffer = selectionBuffer;
+
     this._render = render;
 
     this._canvas.onmousedown = (event: MouseEvent) => {
@@ -1219,6 +1242,39 @@ class Controls {
       this._prevY = currentY;
       
       requestAnimationFrame(this._render);
+
+      // Handle ray cast
+      const projectionMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), this._projectionMatrix);
+      const clipSpacePosition = glMatrix.vec4.fromValues(currentX, currentY, 0.0, 1.0);
+
+      let camSpacePosition = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), clipSpacePosition, projectionMatrixInverse);
+      camSpacePosition[3] = 0;
+
+      let dir = glMatrix.vec4.transformMat4(glMatrix.vec4.create(), camSpacePosition, this._modelViewMatrixInverse);
+      let non_orth_dir = glMatrix.vec3.fromValues(dir[0], dir[1], dir[2]);
+
+      let center = glMatrix.vec3.fromValues(0.0, 0.0, 0.0);
+      center = glMatrix.vec3.fromValues(center[0] - this._arcball.forward[0],
+          center[1] - this._arcball.forward[1],
+          center[2] - this._arcball.forward[2]);
+
+      const dot = glMatrix.vec3.dot(center, non_orth_dir);
+      const dis = glMatrix.vec3.length(glMatrix.vec3.subtract(glMatrix.vec3.create(), glMatrix.vec3.scale(glMatrix.vec3.create(), non_orth_dir, dot), center));
+      console.log("dis ", dis);
+      if (dis < 4.0) {
+          const selectionUniformBufferUpdate = this._webGPUContext.createGPUBuffer(new Uint32Array([1]), GPUBufferUsage.COPY_SRC);
+          const commandEncoder = this._webGPUContext.device.createCommandEncoder();
+          commandEncoder.copyBufferToBuffer(selectionUniformBufferUpdate, 0, this._selectionBuffer, 0, 4);
+          this._webGPUContext.device.queue.submit([commandEncoder.finish()]);
+          requestAnimationFrame(this._render);
+          console.log("update selection")
+      } else {
+        const selectionUniformBufferUpdate = this._webGPUContext.createGPUBuffer(new Uint32Array([0]), GPUBufferUsage.COPY_SRC);
+        const commandEncoder = this._webGPUContext.device.createCommandEncoder();
+        commandEncoder.copyBufferToBuffer(selectionUniformBufferUpdate, 0, this._selectionBuffer, 0, 4);
+        this._webGPUContext.device.queue.submit([commandEncoder.finish()]);
+        requestAnimationFrame(this._render);
+      }
     }
 
     canvas.onmouseup = (event: MouseEvent) => {

@@ -8,6 +8,8 @@ var<uniform> normalMatrix: mat4x4<f32>;
 var<uniform> lightDirection: vec3<f32>;
 @group(0) @binding(4)
 var<uniform> viewDirection: vec3<f32>;
+@group(0) @binding(5)
+var<uniform> selection: u32;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -58,5 +60,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         diffuse(lightDir, n, diffuseColor.rgb)* diffuseConstant +
         specular(lightDir, viewDir, n, specularColor.rgb, shininess) * specularConstant;
       
+    if (selection == 1u) {
+        return vec4<f32>(radiance * 0.2, 1.0);
+    }
     return vec4<f32>(radiance ,1.0);
 }
