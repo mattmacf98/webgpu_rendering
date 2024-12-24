@@ -1,6 +1,5 @@
-import stencilWgsl from "../shaders/stencil_shader.wgsl?raw";
-import { ObjDataExtractor } from "./ObjDataExctractor";
-import { createGPUBuffer } from "./Utils";
+import { ObjDataExtractor } from "../ObjDataExctractor";
+import { createGPUBuffer } from "../Utils";
 
 export class Stencil {
     private _pipeline: GPURenderPipeline;
@@ -9,8 +8,8 @@ export class Stencil {
     private _indexBuffer?: GPUBuffer;
     private _indexSize?: number;
 
-    public static async init(device: GPUDevice, modelViewMatrixUniformBuffer: GPUBuffer, projectionMatrixUnifromBuffer: GPUBuffer): Promise<Stencil> {
-        const shaderModule = device.createShaderModule({ code: stencilWgsl });
+    public static async init(device: GPUDevice, modelViewMatrixUniformBuffer: GPUBuffer, projectionMatrixUnifromBuffer: GPUBuffer, shaderCode: string): Promise<Stencil> {
+        const shaderModule = device.createShaderModule({ code: shaderCode });
 
         const objResponse = await fetch("./objs/stencil.obj");
         const objBlob = await objResponse.blob();

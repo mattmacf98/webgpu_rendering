@@ -1,5 +1,4 @@
-import objModelWgsl from "../shaders/object_shader.wgsl?raw";
-import { createGPUBuffer } from "./Utils";
+import { createGPUBuffer } from "../Utils";
 
 export class Plane {
     private _pipeline: GPURenderPipeline;
@@ -9,8 +8,8 @@ export class Plane {
 
     public static async init(device: GPUDevice, modelViewMatrixUniformBuffer: GPUBuffer, 
         projectionMatrixUnifromBuffer: GPUBuffer, normalMatrixUniformBuffer: GPUBuffer,
-        viewDirectionUniformBuffer: GPUBuffer, lightDirectionUniformBuffer: GPUBuffer): Promise<Plane> {
-        const shaderModule = device.createShaderModule({ code: objModelWgsl });
+        viewDirectionUniformBuffer: GPUBuffer, lightDirectionUniformBuffer: GPUBuffer, shaderCode: string): Promise<Plane> {
+        const shaderModule = device.createShaderModule({ code: shaderCode });
 
         const positions = new Float32Array([
             -100, -100, 0,

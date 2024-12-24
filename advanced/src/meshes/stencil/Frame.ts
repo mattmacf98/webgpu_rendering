@@ -1,6 +1,5 @@
-import objModelWgsl from "../shaders/object_shader.wgsl?raw";
-import { ObjDataExtractor } from "./ObjDataExctractor";
-import { createGPUBuffer } from "./Utils";
+import { ObjDataExtractor } from "../ObjDataExctractor";
+import { createGPUBuffer } from "../Utils";
 
 export class Frame {
     private _pipeline: GPURenderPipeline;
@@ -12,8 +11,8 @@ export class Frame {
 
     public static async init(device: GPUDevice, modelViewMatrixUniformBuffer: GPUBuffer, 
         projectionMatrixUnifromBuffer: GPUBuffer, normalMatrixUniformBuffer: GPUBuffer,
-        viewDirectionUniformBuffer: GPUBuffer, lightDirectionUniformBuffer: GPUBuffer): Promise<Frame> {
-        const shaderModule = device.createShaderModule({ code: objModelWgsl });
+        viewDirectionUniformBuffer: GPUBuffer, lightDirectionUniformBuffer: GPUBuffer, shaderCode: string): Promise<Frame> {
+        const shaderModule = device.createShaderModule({ code: shaderCode });
 
         const objResponse = await fetch("./objs/frame.obj");
         const objBlob = await objResponse.blob();
