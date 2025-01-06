@@ -20,3 +20,20 @@ export const createGPUBuffer = (device: GPUDevice, data: Float32Array | Uint16Ar
     buffer.unmap();
     return buffer;
 }
+
+export const img2Texture = async (device: GPUDevice, filePath: string): Promise<GPUTexture> => {
+  const response = await fetch(filePath);
+  const blob = await response.blob();
+  const imageBitmap = await createImageBitmap(blob);
+  const textureDescriptor: GPUTextureDescriptor = {
+    size: { width: imageBitmap.width, height: imageBitmap.height },
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  }
+
+  const texture = device.createTexture(textureDescriptor);
+
+  device.queue.copyExternalImageToTexture({ source: imageBitmap }, {texture}, textureDescriptor.size);
+
+  return texture;
+}
