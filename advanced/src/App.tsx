@@ -10,6 +10,7 @@ import { Teapot } from "./meshes/stencil/Teapot";
 import { Teapot as ShadowTeapot} from "./meshes/shadowmap/Teapot";
 import { Plane as ShadowPlane } from "./meshes/shadowmap/Plane";
 import { Teapot as ToonTeapot } from "./meshes/toon/Teapot";
+import { Teapot as TransparentTeapot } from "./meshes/transparency/Teapot";
 import objModelWgsl from "./shaders/object_shader.wgsl?raw";
 import stencilWgsl from "./shaders/stencil_shader.wgsl?raw";
 import shadowObjModelWgsl from "./shaders/object_with_shadow_shader.wgsl?raw";
@@ -17,16 +18,266 @@ import shadowLightWgsl from "./shaders/light_view_shader.wgsl?raw";
 import toonObjModelWgsl from "./shaders/object_toon_shader.wgsl?raw";
 import outlineShader from "./shaders/outline_shader.wgsl?raw";
 import skyBoxShader from "./shaders/skybox_shader.wgsl?raw";
+import finalBlendShader from "./shaders/final_blend_shader.wgsl?raw";
+import blendShader from "./shaders/blend_shader.wgsl?raw";
+import transparencyObjModelWgsl from "./shaders/object_transparency_shader.wgsl?raw";
 import { Skybox } from "./meshes/skybox";
+import { Pipeline } from "./meshes/transparency/Pipeline";
+import { Final } from "./meshes/transparency/Final";
+import { Blend } from "./meshes/transparency/Blend";
 
 const App = () => {
   useEffect(() => {
-    renderSkyboxExample()
+    renderTransparencyExample()
   }, [])
 
   return (
     <canvas id="canvas" width="640" height="480" style={{width: "100%", height: "100%"}}></canvas>
   )
+}
+
+const renderTransparencyExample = async () => {
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter!.requestDevice();
+  const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+  const context = canvas.getContext("webgpu");
+  const canvasConfig: GPUCanvasConfiguration = {
+    device: device!,
+    format: navigator.gpu.getPreferredCanvasFormat() as GPUTextureFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    alphaMode: "opaque",
+  }
+  context!.configure(canvasConfig);
+  let angle = 0.0;
+
+  const arcball = new Arcball(5.0);
+  const modelViewMatrix = arcball.getMatrices();
+  const modelViewMatrixUniformBuffer = createGPUBuffer(device!, new Float32Array(modelViewMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+  const viewDir = glMatrix.vec3.fromValues(-10.0, -10.0, -10.0);
+  const viewDirectionUniformBuffer = createGPUBuffer(device!, new Float32Array(viewDir), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+  const lightDirectionBuffer = createGPUBuffer(device!, new Float32Array(viewDir), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+  const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix)!;
+  const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+  const normalMatrixUniformBuffer = createGPUBuffer(device!, new Float32Array(normalMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+  const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, canvas.width / canvas.height, 0.1, 1000.0);
+  const projectionMatrixUnifromBuffer = createGPUBuffer(device!, new Float32Array(projectionMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
+
+  const pipeline = await Pipeline.init(device!, modelViewMatrixUniformBuffer, projectionMatrixUnifromBuffer, normalMatrixUniformBuffer, viewDirectionUniformBuffer, lightDirectionBuffer, transparencyObjModelWgsl);
+  const teapot = await TransparentTeapot.init(device!, pipeline);
+  const final = await Final.init(device!, finalBlendShader);
+  const blend =  await Blend.init(device!, blendShader);
+
+  let depthTexture0: GPUTexture | null = null;
+  let depthStencilAttachment0: GPURenderPassDepthStencilAttachment | undefined = undefined;
+
+  let depthTexture1: GPUTexture | null = null;
+  let depthStencilAttachment1: GPURenderPassDepthStencilAttachment | undefined = undefined;
+
+  let dstTexture: GPUTexture | null = null;
+  let colorTextureForCleanup: GPUTexture | null = null;
+
+  async function render() {
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    let currentCanvasWidth = canvas.clientWidth * devicePixelRatio;
+    let currentCanvasHeight = canvas.clientHeight * devicePixelRatio;
+
+    let projectionMatrixUniformBufferUpdate = null;
+    let colorTextureForDebugging: GPUTexture | null = null;
+
+    if (currentCanvasWidth != canvas.width || currentCanvasHeight != canvas.height || colorTextureForDebugging == null || dstTexture == null || depthTexture0 == null || depthTexture1 ==  null) {
+      canvas.width = currentCanvasWidth;
+      canvas.height = currentCanvasHeight;
+
+      if (depthTexture0 !== null) {
+          depthTexture0.destroy();
+      }
+
+      if (depthTexture1 !== null) {
+        depthTexture1.destroy();
+      }
+
+      const depthTextureDesc: GPUTextureDescriptor = {
+          size: [canvas.width, canvas.height, 1],
+          dimension: '2d',
+          format: 'depth32float',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING
+      };
+
+      depthTexture0 = device!.createTexture(depthTextureDesc);
+      depthTexture0.label = "DEPTH_0"
+      depthTexture1 = device!.createTexture(depthTextureDesc);
+      depthTexture1.label = "DEPTH_1"
+
+      pipeline.updateDepthPeelingUniformGroup(device!, depthTexture0, depthTexture1);
+
+
+      depthStencilAttachment0 = {
+          view: depthTexture1.createView(),
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'store'
+      };
+
+      depthStencilAttachment1 = {
+        view: depthTexture0.createView(),
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store'
+      };
+
+      let projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(),
+          1.4, canvas.width / canvas.height, 0.1, 1000.0);
+
+      projectionMatrixUniformBufferUpdate = createGPUBuffer(device!, new Float32Array(projectionMatrix), GPUBufferUsage.COPY_SRC);
+
+      const colorTextureForDstDesc: GPUTextureDescriptor = {
+        size: [canvas.width, canvas.height, 1],
+        dimension: '2d',
+        format: 'bgra8unorm',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
+      };
+
+      if (colorTextureForCleanup !== null) {
+        colorTextureForCleanup.destroy();
+      }
+
+      colorTextureForDebugging = device!.createTexture(colorTextureForDstDesc);
+      colorTextureForDebugging.label ="DEBUG_TEXTURE";
+      colorTextureForCleanup = colorTextureForDebugging;
+
+      if (dstTexture !== null) {
+        dstTexture.destroy();
+      }
+
+      dstTexture = device!.createTexture(colorTextureForDstDesc);
+      dstTexture.label ="DEST_TEXTURE";
+
+      blend.updateTexture(device!, colorTextureForDebugging);
+      final.updateTexture(device!, dstTexture);
+    }
+
+    const modelViewMatrix = arcball.getMatrices();
+    const modelViewMatrixUniformBufferUpdate = createGPUBuffer(device!, new Float32Array(modelViewMatrix), GPUBufferUsage.COPY_SRC);
+
+    const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix);
+    const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
+    const normalMatrixUniformBufferUpdate = createGPUBuffer(device!, new Float32Array(normalMatrix), GPUBufferUsage.COPY_SRC);
+
+    const viewDir = glMatrix.vec3.fromValues(-arcball.forward[0], -arcball.forward[1], -arcball.forward[2]);
+    const viewDirectionUniformBufferUpdate = createGPUBuffer(device!, new Float32Array(viewDir), GPUBufferUsage.COPY_SRC);
+
+    const lightDir = glMatrix.vec3.fromValues(Math.cos(angle) * 8.0, Math.sin(angle) * 8.0, 10);
+    const lightDirectionBufferUpdate = createGPUBuffer(device!, new Float32Array(lightDir), GPUBufferUsage.COPY_SRC);
+
+    const colorTexture = context!.getCurrentTexture();
+    const colorTextureView = colorTexture.createView();
+
+    const colorAttachment0: GPURenderPassColorAttachment = {
+      view: colorTextureForDebugging!.createView(),
+      clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      loadOp: 'clear',
+      storeOp: 'store'
+    };
+
+    const colorAttachment1: GPURenderPassColorAttachment = {
+      view: colorTextureForDebugging!.createView(),
+      clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      loadOp: 'clear',
+      storeOp: 'store'
+    };
+
+    const cleanUpColorAttachment: GPURenderPassColorAttachment ={
+        view: dstTexture!.createView(),
+        clearValue: {r: 0, g: 0, b: 0, a: 1},
+        loadOp: 'clear',
+        storeOp: 'store'
+    }
+
+    const blendColorAttachment: GPURenderPassColorAttachment ={
+      view: dstTexture!.createView(),
+      clearValue: {r: 0, g: 0, b: 0, a: 0},
+      loadOp: 'load',
+      storeOp: 'store'
+    }
+
+    const finalColorAttachment: GPURenderPassColorAttachment ={
+      view: colorTextureView,
+      clearValue: {r: 0, g: 0, b: 0, a: 1},
+      loadOp: 'load',
+      storeOp: 'store'
+    }
+
+    const renderPassCleanupDesc: GPURenderPassDescriptor = {
+      colorAttachments: [cleanUpColorAttachment]
+    };
+
+    const renderPassDesc0: GPURenderPassDescriptor =  {
+      colorAttachments: [colorAttachment0],
+      depthStencilAttachment: depthStencilAttachment0
+    }
+
+    const renderPassDesc1: GPURenderPassDescriptor =  {
+      colorAttachments: [colorAttachment1],
+      depthStencilAttachment: depthStencilAttachment1
+    }
+
+    const renderPassBlend: GPURenderPassDescriptor = {
+      colorAttachments: [blendColorAttachment]
+    }
+
+    const renderPassFinal: GPURenderPassDescriptor = {
+      colorAttachments: [finalColorAttachment]
+    }
+
+    const commandEncoder = device!.createCommandEncoder();
+    if (projectionMatrixUniformBufferUpdate != null) {
+      commandEncoder.copyBufferToBuffer(projectionMatrixUniformBufferUpdate, 0, projectionMatrixUnifromBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+    }
+    commandEncoder.copyBufferToBuffer(modelViewMatrixUniformBufferUpdate, 0, modelViewMatrixUniformBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+    commandEncoder.copyBufferToBuffer(normalMatrixUniformBufferUpdate, 0, normalMatrixUniformBuffer, 0, 16 * Float32Array.BYTES_PER_ELEMENT);
+    commandEncoder.copyBufferToBuffer(viewDirectionUniformBufferUpdate, 0, viewDirectionUniformBuffer, 0, 3 * Float32Array.BYTES_PER_ELEMENT);
+    commandEncoder.copyBufferToBuffer(lightDirectionBufferUpdate, 0, lightDirectionBuffer, 0, 3 * Float32Array.BYTES_PER_ELEMENT);
+
+    const passEncoderCleanup = commandEncoder.beginRenderPass(renderPassCleanupDesc);
+    passEncoderCleanup.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
+    passEncoderCleanup.end();
+
+    for (let p = 0; p < 6; p++) {
+      const passEncoder0 = p % 2 == 0 ? commandEncoder.beginRenderPass(renderPassDesc0) : commandEncoder.beginRenderPass(renderPassDesc1);
+      passEncoder0.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
+      teapot.encodeRenderPass(passEncoder0, pipeline, p);
+      passEncoder0.end()
+
+      const passEncoder1 = commandEncoder.beginRenderPass(renderPassBlend);
+      passEncoder1.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
+      blend.encodeRenderPass(passEncoder1);
+      passEncoder1.end()
+    }
+    
+    const finalEncoder = commandEncoder.beginRenderPass(renderPassFinal);
+    final.encodeRenderPass(finalEncoder);
+    finalEncoder.end();
+
+    device!.queue.submit([commandEncoder.finish()]);
+    await device!.queue.onSubmittedWorkDone();
+
+    if (projectionMatrixUniformBufferUpdate) {
+      projectionMatrixUniformBufferUpdate.destroy();
+    }
+    modelViewMatrixUniformBufferUpdate.destroy();
+    normalMatrixUniformBufferUpdate.destroy();
+    viewDirectionUniformBufferUpdate.destroy();
+    lightDirectionBufferUpdate.destroy();
+
+    angle += 0.01;
+    requestAnimationFrame(render);
+  }
+
+  new Controls(canvas, arcball, render);
+  requestAnimationFrame(render);
 }
 
 const renderSkyboxExample = async () => {
@@ -46,13 +297,6 @@ const renderSkyboxExample = async () => {
   const arcball = new Arcball(15.0);
   const modelViewMatrix = arcball.getMatrices();
   const modelViewMatrixUniformBuffer = createGPUBuffer(device!, new Float32Array(modelViewMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-
-  const viewDir = glMatrix.vec3.fromValues(-10.0, -10.0, -10.0);
-  const viewDirectionUniformBuffer = createGPUBuffer(device!, new Float32Array(viewDir), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-
-  const modelViewMatrixInverse = glMatrix.mat4.invert(glMatrix.mat4.create(), modelViewMatrix)!;
-  const normalMatrix = glMatrix.mat4.transpose(glMatrix.mat4.create(), modelViewMatrixInverse);
-  const normalMatrixUniformBuffer = createGPUBuffer(device!, new Float32Array(normalMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
 
   const projectionMatrix = glMatrix.mat4.perspective(glMatrix.mat4.create(), 1.4, canvas.width / canvas.height, 0.1, 1000.0);
   const projectionMatrixUnifromBuffer = createGPUBuffer(device!, new Float32Array(projectionMatrix), GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
