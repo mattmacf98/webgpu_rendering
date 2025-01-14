@@ -13,7 +13,7 @@ export class Controls {
     private _arcball: Arcball;
     private _render: () => void;
 
-    constructor(canvas: HTMLCanvasElement, arcBall: Arcball, render: () => void) {
+    constructor(canvas: HTMLCanvasElement, arcBall: Arcball, render: any) {
         this._arcball = arcBall;
         this._canvas = canvas;
         this._prevX = 0;
