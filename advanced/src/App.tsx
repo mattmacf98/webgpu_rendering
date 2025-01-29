@@ -19,7 +19,6 @@ import shadowLightWgsl from "./shaders/light_view_shader.wgsl?raw";
 import toonObjModelWgsl from "./shaders/object_toon_shader.wgsl?raw";
 import outlineShader from "./shaders/outline_shader.wgsl?raw";
 import skyBoxShader from "./shaders/skybox_shader.wgsl?raw";
-import finalBlendShader from "./shaders/final_blend_shader.wgsl?raw";
 import blendShader from "./shaders/blend_shader.wgsl?raw";
 import transparencyObjModelWgsl from "./shaders/object_transparency_shader.wgsl?raw";
 import { Skybox } from "./meshes/skybox";
@@ -190,7 +189,7 @@ const renderTransparencyExample = async () => {
 
   const pipeline = await Pipeline.init(device!, modelViewMatrixUniformBuffer, projectionMatrixUnifromBuffer, normalMatrixUniformBuffer, viewDirectionUniformBuffer, lightDirectionBuffer, transparencyObjModelWgsl);
   const teapot = await TransparentTeapot.init(device!, pipeline);
-  const final = await Final.init(device!, finalBlendShader);
+  const final = await Final.init(device!, blendShader);
   const blend =  await Blend.init(device!, blendShader);
 
   let depthTexture0: GPUTexture | null = null;
@@ -598,8 +597,6 @@ const renderToonShaderExample = async () => {
     depthStencilAttachment: lightDepthAttachment
   }
 
-  const copiedBuffer = createGPUBuffer(device!, new Float32Array(1024 * 1024), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-
   let depthTexture: GPUTexture | null = null;
   let depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined = undefined;
 
@@ -688,8 +685,7 @@ const renderToonShaderExample = async () => {
     lightPassEncoder.setViewport(0, 0, 1024, 1024, 0, 1);
     teapot.encodeLightRenderPass(lightPassEncoder);
     lightPassEncoder.end();
-    commandEncoder.copyTextureToBuffer({texture: ligthDepthTexture, origin: {x: 0, y:0}}, {buffer: copiedBuffer, bytesPerRow: 1024 * 4}, {width: 1024, height: 1024});
-
+   
     const passEncoder = commandEncoder.beginRenderPass(renderPassDesc);
     passEncoder.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
     teapot.encodeRenderPass(passEncoder);
@@ -798,8 +794,6 @@ const renderShadowExample = async () => {
     depthStencilAttachment: lightDepthAttachment
   }
 
-  const copiedBuffer = createGPUBuffer(device!, new Float32Array(1024 * 1024), GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ);
-
   let depthTexture: GPUTexture | null = null;
   let depthStencilAttachment: GPURenderPassDepthStencilAttachment | undefined = undefined;
 
@@ -888,8 +882,7 @@ const renderShadowExample = async () => {
     lightPassEncoder.setViewport(0, 0, 1024, 1024, 0, 1);
     teapot.encodeLightRenderPass(lightPassEncoder);
     lightPassEncoder.end();
-    commandEncoder.copyTextureToBuffer({texture: ligthDepthTexture, origin: {x: 0, y:0}}, {buffer: copiedBuffer, bytesPerRow: 1024 * 4}, {width: 1024, height: 1024});
-
+    
     const passEncoder = commandEncoder.beginRenderPass(renderPassDesc);
     passEncoder.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
     teapot.encodeRenderPass(passEncoder);
@@ -1060,13 +1053,8 @@ const renderDepthStencilExample = async () => {
     passEncoderTwo.setStencilReference(0x0);
     plane.encodeRenderPass(passEncoderTwo);
     teapot.encodeRenderPass(passEncoderTwo);
+    frame.encodeRenderPass(passEncoderTwo);
     passEncoderTwo.end();
-
-    const passEncoderThree = commandEncoder.beginRenderPass(renderPassDesc2);
-    passEncoderThree.setViewport(0, 0, canvas.width, canvas.height, 0, 1);
-    passEncoderThree.setStencilReference(0x0);
-    frame.encodeRenderPass(passEncoderThree);
-    passEncoderThree.end();
 
     device!.queue.submit([commandEncoder.finish()]);
 
